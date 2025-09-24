@@ -1,115 +1,275 @@
-import Image from "next/image";
-import { Geist, Geist_Mono } from "next/font/google";
+import React, { useState, useEffect, useRef } from 'react';
+import { AppProvider, useApp } from '@/context/AppContext';
+import { ToastProvider, useToastActions } from '@/components/ui/Toast';
+import PianoRoll from '@/components/PianoRoll';
+import SettingsPanel from '@/components/SettingsPanel';
+import { Header } from '@/components/layout/Header';
+import { Main } from '@/components/layout/Main';
+import { Footer } from '@/components/layout/Footer';
+import { ControlPanel } from '@/components/layout/ControlPanel';
+import { GeminiService } from '@/services/geminiService';
+import { AudioService } from '@/services/audioService';
+import { MidiExportService } from '@/services/midiExportService';
+import { getDefaultProgression } from '@/utils/defaultProgression';
+import { PianoRollDimensions, RootNote, ScaleType } from '@/types';
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
+function MainApp() {
+  const { state, dispatch, clearNotes } = useApp();
+  const { success, error } = useToastActions();
+  const [showSettings, setShowSettings] = useState(false);
+  const [showPianoRoll, setShowPianoRoll] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [volume, setVolume] = useState(100);
+  const [bpm, setBpm] = useState(120);
+  
+  const geminiService = useRef<GeminiService | null>(null);
+  const audioService = useRef<AudioService | null>(null);
+  const midiExportService = useRef<MidiExportService | null>(null);
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
+  // Initialize services
+  useEffect(() => {
+    if (state.settings.apiKey) {
+      geminiService.current = new GeminiService(state.settings.apiKey);
+    }
+    audioService.current = new AudioService();
+    midiExportService.current = new MidiExportService();
+  }, [state.settings.apiKey]);
+
+  // Load default progression if no notes exist
+  useEffect(() => {
+    if (state.notes.length === 0) {
+      const defaultNotes = getDefaultProgression();
+      defaultNotes.forEach(note => {
+        dispatch({ type: 'ADD_NOTE', payload: note });
+      });
+    }
+  }, [state.notes.length, dispatch]);
+
+  // Apply theme to document
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', state.settings.theme === 'dark');
+  }, [state.settings.theme]);
+
+  const handleGenerate = async () => {
+    if (!state.settings.apiKey) {
+      error('Please set your Gemini API key in the settings panel.', 'API Key Required');
+      return;
+    }
+
+    if (!geminiService.current) {
+      geminiService.current = new GeminiService(state.settings.apiKey);
+    }
+
+    setIsGenerating(true);
+    try {
+      const newNotes = await geminiService.current.generateChordProgression(
+        state.rootNote as RootNote,
+        state.scaleType as ScaleType,
+        4
+      );
+      
+      // Clear existing notes and add new ones
+      clearNotes();
+      newNotes.forEach(note => {
+        dispatch({ type: 'ADD_NOTE', payload: note });
+      });
+      
+      success('Chord progression generated successfully!');
+    } catch (err) {
+      console.error('Generation error:', err);
+      error(err instanceof Error ? err.message : 'Failed to generate chord progression.');
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const handleExportMIDI = async () => {
+    if (!midiExportService.current) {
+      midiExportService.current = new MidiExportService();
+    }
+
+    try {
+      const midiBlob = midiExportService.current.exportMIDI(state.notes);
+      const url = URL.createObjectURL(midiBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `chord-progression-${Date.now()}.mid`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
+      success('MIDI file downloaded successfully!');
+    } catch (err) {
+      console.error('MIDI export error:', err);
+      error('Failed to export MIDI file.');
+    }
+  };
+
+  const handleExportWAV = async () => {
+    if (!audioService.current) {
+      audioService.current = new AudioService();
+    }
+
+    try {
+      success('Preparing your WAV file...', 'Export Started');
+      const wavBlob = await audioService.current.exportWAV(state.notes);
+      const url = URL.createObjectURL(wavBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `chord-progression-${Date.now()}.wav`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
+      success('WAV file downloaded successfully!');
+    } catch (err) {
+      console.error('WAV export error:', err);
+      error('Failed to export WAV file.');
+    }
+  };
+
+  const handlePlay = () => {
+    setIsPlaying(true);
+    // TODO: Implement actual audio playback
+  };
+
+  const handlePause = () => {
+    setIsPlaying(false);
+    // TODO: Implement actual audio pause
+  };
+
+  const handleStop = () => {
+    setIsPlaying(false);
+    // TODO: Implement actual audio stop
+  };
+
+  const pianoRollDimensions: PianoRollDimensions = {
+    width: 1000,
+    height: 400,
+    noteHeight: 16,
+    beatWidth: 50
+  };
+
+  const keySignature = `${state.rootNote} ${state.scaleType}`;
+
+  return (
+    <div className="min-h-screen bg-gray-900 text-white flex flex-col">
+      <Header 
+        onExportMIDI={handleExportMIDI}
+        onExportWAV={handleExportWAV}
+      />
+
+      <Main 
+        notesCount={state.notes.length}
+        onOpenPianoRoll={() => setShowPianoRoll(true)}
+      >
+        <ControlPanel
+          onGenerate={handleGenerate}
+          isGenerating={isGenerating}
+          onExportMIDI={handleExportMIDI}
+          onExportWAV={handleExportWAV}
+          onToggleSettings={() => setShowSettings(true)}
+        />
+      </Main>
+
+      <Footer
+        isPlaying={isPlaying}
+        onPlay={handlePlay}
+        onPause={handlePause}
+        onStop={handleStop}
+        volume={volume}
+        onVolumeChange={setVolume}
+        bpm={bpm}
+        onBpmChange={setBpm}
+        keySignature={keySignature}
+      />
+
+      {/* Piano Roll Modal */}
+      {showPianoRoll && (
+        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4 animate-fade-in-150" role="dialog" aria-modal="true" aria-label="Piano Roll">
+          <div className="bg-gray-800 rounded-xl shadow-2xl max-w-7xl w-full max-h-[95vh] overflow-hidden border border-gray-700 animate-scale-in-150">
+            {/* Header */}
+            <div className="p-6 border-b border-gray-700 bg-gray-800/90">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-4">
+                  <div className="flex items-center space-x-2">
+                    <svg className="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                    </svg>
+                    <h2 className="text-h4 text-white">Piano Roll Editor</h2>
+                  </div>
+                  <div className="flex items-center space-x-2 text-body-sm text-gray-400">
+                    <span>•</span>
+                    <span>Double-click to add notes</span>
+                    <span>•</span>
+                    <span>Drag to move</span>
+                    <span>•</span>
+                    <span>Resize edges</span>
+                  </div>
+                </div>
+                <div className="flex items-center space-x-3">
+                  <button className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-body-sm flex items-center space-x-2">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                    </svg>
+                    <span>Export</span>
+                  </button>
+                  <button
+                    onClick={() => setShowPianoRoll(false)}
+                    aria-label="Close piano roll"
+                    className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors duration-200"
+                  >
+                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+            
+            {/* Piano Roll Content */}
+            <div className="relative bg-gray-900">
+              <PianoRoll dimensions={pianoRollDimensions} />
+            </div>
+            
+            {/* Footer */}
+            <div className="p-4 border-t border-gray-700 bg-gray-800/90">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-4 text-body-sm text-gray-400">
+                  <span>Notes: {state.notes.length}</span>
+                  <span>•</span>
+                  <span>Range: C4 - C6</span>
+                  <span>•</span>
+                  <span>Bars: 8</span>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <button className="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-body-sm">Clear All</button>
+                  <button className="px-3 py-1 bg-blue-600 hover:bg-blue-700 rounded text-body-sm">Save Changes</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Settings Panel */}
+      <SettingsPanel
+        isOpen={showSettings}
+        onClose={() => setShowSettings(false)}
+      />
+    </div>
+  );
+}
 
 export default function Home() {
   return (
-    <div
-      className={`${geistSans.className} ${geistMono.className} font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20`}
-    >
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              src/pages/index.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
-        </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
-    </div>
+    <AppProvider>
+      <ToastProvider>
+      <MainApp />
+      </ToastProvider>
+    </AppProvider>
   );
 }

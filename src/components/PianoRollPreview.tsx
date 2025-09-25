@@ -16,6 +16,14 @@ function MiniSection({ title, notes, theme, style, playheadX }: SectionProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [hoverX, setHoverX] = useState<number | null>(null);
 
+  // Calculate canvas dimensions to match grid
+  const beatsPerBar = 4;
+  const bars = 4;
+  const beatWidth = 26;
+  const totalBeats = beatsPerBar * bars;
+  const canvasWidth = totalBeats * beatWidth; // 416px for 4 bars
+  const canvasHeight = 120;
+
   const rangeLabel = useMemo(() => {
     if (!notes || notes.length === 0) return '—';
     const min = notes.reduce((m, n) => (n.pitch < m ? n.pitch : m), notes[0].pitch);
@@ -30,12 +38,12 @@ function MiniSection({ title, notes, theme, style, playheadX }: SectionProps) {
     if (!ctx) return;
     drawMiniPianoRoll(
       ctx,
-      { width: 520, height: 120, noteHeight: 6, beatWidth: 26 },
+      { width: canvasWidth, height: canvasHeight, noteHeight: 6, beatWidth },
       notes,
       theme,
       { style, hoverX: hoverX ?? playheadX ?? null, showBarNumbers: true }
     );
-  }, [notes, theme, style, hoverX, playheadX]);
+  }, [notes, theme, style, hoverX, playheadX, canvasWidth, canvasHeight, beatWidth]);
 
   return (
     <div className="space-y-2">
@@ -52,8 +60,9 @@ function MiniSection({ title, notes, theme, style, playheadX }: SectionProps) {
       <div className="bg-gray-900 rounded-lg border border-gray-800 overflow-hidden shadow-inner">
         <canvas
           ref={canvasRef}
-          width={520}
-          height={120}
+          width={canvasWidth}
+          height={canvasHeight}
+          className="w-full h-full"
           onMouseMove={(e) => {
             const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
             setHoverX(e.clientX - rect.left);
@@ -68,9 +77,12 @@ function MiniSection({ title, notes, theme, style, playheadX }: SectionProps) {
 export default function PianoRollPreview() {
   const { state } = useApp();
   const theme = 'dark';
+  
+  // Calculate consistent beatWidth for playhead
+  const beatWidth = 26;
 
   const segmented = useMemo(() => segmentNotesForPreview(state.notes), [state.notes]);
-  const playheadX = state.currentTime * (26 / 2); // keep preview in sync with editor scaling
+  const playheadX = state.currentTime * (beatWidth / 2); // keep preview in sync with editor scaling
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

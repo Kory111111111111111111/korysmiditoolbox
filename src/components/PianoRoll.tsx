@@ -129,7 +129,7 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
     // Bar lines (thicker)
     ctx.lineWidth = 2;
     ctx.strokeStyle = gridMajor;
-    for (let bar = 0; bar <= bars; bar++) {
+    for (let bar = 0; bar < bars; bar++) {
       const x = bar * beatsPerBar * beatWidth;
       ctx.beginPath();
       ctx.moveTo(x, 0);

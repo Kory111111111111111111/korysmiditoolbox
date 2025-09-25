@@ -50,11 +50,11 @@ export interface SegmentedNotes {
   arp: MidiNote[];
 }
 
-// Heuristic segmentation:
-// - Bass: lowest pitch within each time slice (bar) if sustained <= 2 simultaneous voices
-// - Melody: highest pitch lines with relatively shorter durations and later start times
-// - Arp: sequences of short notes (< 0.35s) within a bar spanning multiple pitches
-// - Chord: remaining sustained notes (>= 0.35s) that overlap in time
+// Enhanced musical pattern recognition:
+// - Chord: 3+ notes playing simultaneously (within 50ms) with similar durations
+// - Melody: Single-note melodic lines, typically in upper register
+// - Bass: Low register patterns (< 60 MIDI), often rhythmic movement
+// - Arp: Sequential notes forming broken chord patterns or rapid scales
 export function segmentNotesForPreview(notes: MidiNote[]): SegmentedNotes {
   const chord: MidiNote[] = [];
   const melody: MidiNote[] = [];
@@ -66,41 +66,143 @@ export function segmentNotesForPreview(notes: MidiNote[]): SegmentedNotes {
   }
 
   const sorted = [...notes].sort((a, b) => a.startTime - b.startTime || a.pitch - b.pitch);
-
-  // Group by bar (assuming 120bpm, 0.5s per beat, 4 beats per bar => 2s bar)
-  const barLengthSec = 2; // 4 beats * 0.5s
-  const bars: Record<number, MidiNote[]> = {};
-  for (const n of sorted) {
-    const barIndex = Math.floor(n.startTime / (barLengthSec));
-    if (!bars[barIndex]) bars[barIndex] = [];
-    bars[barIndex].push(n);
+  
+  // Define pitch ranges
+  const BASS_THRESHOLD = 60; // C4 - notes below this are bass candidates
+  const MELODY_THRESHOLD = 65; // F4 - notes above this are melody candidates
+  const CHORD_SIMULTANEITY_WINDOW = 0.05; // 50ms window for "simultaneous" notes
+  const SHORT_NOTE_THRESHOLD = 0.4; // Notes shorter than this might be arp/melody
+  
+  // Group notes by start time (with small tolerance for "simultaneous" notes)
+  const timeGroups: Record<string, MidiNote[]> = {};
+  
+  for (const note of sorted) {
+    // Round start time to nearest 50ms for grouping
+    const roundedTime = Math.round(note.startTime / CHORD_SIMULTANEITY_WINDOW) * CHORD_SIMULTANEITY_WINDOW;
+    const timeKey = roundedTime.toFixed(2);
+    
+    if (!timeGroups[timeKey]) timeGroups[timeKey] = [];
+    timeGroups[timeKey].push(note);
   }
-
-  Object.values(bars).forEach(barNotes => {
-    if (barNotes.length === 0) return;
-
-    // Identify short notes (candidate arp/melody)
-    const shortNotes = barNotes.filter(n => n.duration < 0.35);
-    const longNotes = barNotes.filter(n => n.duration >= 0.35);
-
-    // Arp: sequences of short notes spanning at least 3 distinct pitches
-    const distinctShortPitches = new Set(shortNotes.map(n => n.pitch));
-    const isArpBar = distinctShortPitches.size >= 3 && shortNotes.length >= 3;
-    if (isArpBar) {
-      arp.push(...shortNotes);
-    } else {
-      // Treat short notes as melody candidates
-      melody.push(...shortNotes);
+  
+  // Analyze each time group
+  Object.values(timeGroups).forEach(groupNotes => {
+    if (groupNotes.length === 0) return;
+    
+    // Sort by pitch within group
+    groupNotes.sort((a, b) => a.pitch - b.pitch);
+    
+    if (groupNotes.length >= 3) {
+      // 3+ simultaneous notes = likely a chord
+      // Check if durations are similar (within 50% of each other)
+      const avgDuration = groupNotes.reduce((sum, n) => sum + n.duration, 0) / groupNotes.length;
+      const durationsAreSimilar = groupNotes.every(n => 
+        Math.abs(n.duration - avgDuration) / avgDuration < 0.5
+      );
+      
+      if (durationsAreSimilar && avgDuration >= 0.5) {
+        // This is a chord
+        chord.push(...groupNotes);
+        return;
+      }
     }
-
-    // From remaining long notes, pick lowest as bass if reasonably low
-    if (longNotes.length > 0) {
-      const lowest = longNotes.reduce((min, n) => (n.pitch < min.pitch ? n : min), longNotes[0]);
-      bass.push(lowest);
-      const withoutLowest = longNotes.filter(n => n !== lowest);
-      chord.push(...withoutLowest);
+    
+    // For smaller groups or non-chord patterns, classify individually
+    for (const note of groupNotes) {
+      if (note.pitch < BASS_THRESHOLD) {
+        // Low notes go to bass
+        bass.push(note);
+      } else if (note.duration < SHORT_NOTE_THRESHOLD) {
+        // Short notes in upper register - check if part of arpeggio pattern
+        const timeWindow = 1.0; // 1 second window to look for arp patterns
+        const windowStart = note.startTime;
+        const windowEnd = windowStart + timeWindow;
+        
+        const nearbyShortNotes = sorted.filter(n => 
+          n.startTime >= windowStart && 
+          n.startTime <= windowEnd && 
+          n.duration < SHORT_NOTE_THRESHOLD &&
+          Math.abs(n.pitch - note.pitch) <= 24 // Within 2 octaves
+        );
+        
+        // If there are 4+ short notes in this time window with varied pitches, it's likely an arp
+        const uniquePitches = new Set(nearbyShortNotes.map(n => n.pitch));
+        if (nearbyShortNotes.length >= 4 && uniquePitches.size >= 3) {
+          arp.push(note);
+        } else {
+          // Otherwise it's melody
+          melody.push(note);
+        }
+      } else {
+        // Longer notes in upper register
+        if (note.pitch >= MELODY_THRESHOLD) {
+          melody.push(note);
+        } else {
+          // Mid-range sustained notes - could be chord tones or bass
+          const hasSimultaneousNotes = sorted.some(other => 
+            other !== note &&
+            Math.abs(other.startTime - note.startTime) < CHORD_SIMULTANEITY_WINDOW
+          );
+          
+          if (hasSimultaneousNotes) {
+            chord.push(note);
+          } else {
+            bass.push(note);
+          }
+        }
+      }
     }
   });
+  
+  // Post-process: Clean up misclassified patterns
+  
+  // If we have very few chord notes but many bass notes, some bass notes might actually be chords
+  if (chord.length < 3 && bass.length > 6) {
+    const bassNotesToMove = bass.filter(n => n.pitch >= 50 && n.duration >= 1.0);
+    if (bassNotesToMove.length >= 3) {
+      chord.push(...bassNotesToMove);
+      bassNotesToMove.forEach(moveNote => {
+        const index = bass.indexOf(moveNote);
+        if (index > -1) bass.splice(index, 1);
+      });
+    }
+  }
+  
+  // If arp section is empty but we have many short melody notes, some might be arps
+  if (arp.length === 0 && melody.length > 8) {
+    const shortMelodyNotes = melody.filter(n => n.duration < 0.3);
+    if (shortMelodyNotes.length >= 6) {
+      // Look for sequential patterns
+      shortMelodyNotes.sort((a, b) => a.startTime - b.startTime);
+      const sequentialArp: MidiNote[] = [];
+      
+      for (let i = 0; i < shortMelodyNotes.length - 2; i++) {
+        const current = shortMelodyNotes[i];
+        const next1 = shortMelodyNotes[i + 1];
+        const next2 = shortMelodyNotes[i + 2];
+        
+        // Check if these form a sequence (timing and pitch)
+        const timingGap1 = next1.startTime - current.startTime;
+        const timingGap2 = next2.startTime - next1.startTime;
+        const pitchDiff1 = Math.abs(next1.pitch - current.pitch);
+        const pitchDiff2 = Math.abs(next2.pitch - next1.pitch);
+        
+        if (timingGap1 < 0.5 && timingGap2 < 0.5 && pitchDiff1 <= 12 && pitchDiff2 <= 12) {
+          if (!sequentialArp.includes(current)) sequentialArp.push(current);
+          if (!sequentialArp.includes(next1)) sequentialArp.push(next1);
+          if (!sequentialArp.includes(next2)) sequentialArp.push(next2);
+        }
+      }
+      
+      if (sequentialArp.length >= 4) {
+        arp.push(...sequentialArp);
+        sequentialArp.forEach(moveNote => {
+          const index = melody.indexOf(moveNote);
+          if (index > -1) melody.splice(index, 1);
+        });
+      }
+    }
+  }
 
   return { chord, melody, bass, arp };
 }
@@ -178,7 +280,7 @@ export function drawMiniPianoRoll(
   ctx.fillStyle = isDark ? backgroundColor : '#ffffff';
   ctx.fillRect(0, 0, width, height);
 
-  // Row shading (piano key stripes)
+  // Row shading (piano key stripes) - use gridWidth for content area only
   for (let i = 0; i < noteRange; i++) {
     const pitch = maxNote - i;
     const y = i * noteHeight;
@@ -208,7 +310,7 @@ export function drawMiniPianoRoll(
   // Bar lines (thicker)
   ctx.strokeStyle = gridMajor;
   ctx.lineWidth = 2;
-  for (let bar = 0; bar <= bars; bar++) {
+  for (let bar = 0; bar < bars; bar++) {
     const x = bar * beatsPerBar * beatWidth;
     ctx.beginPath();
     ctx.moveTo(x, 0);

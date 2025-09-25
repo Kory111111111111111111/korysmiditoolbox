@@ -21,6 +21,7 @@ export interface AppState {
   rootNote: string;
   scaleType: string;
   settings: AppSettings;
+  editingSection: SectionType;
 }
 
 export interface PianoRollDimensions {
@@ -33,6 +34,8 @@ export interface PianoRollDimensions {
 export type RootNote = 'C' | 'C#' | 'D' | 'D#' | 'E' | 'F' | 'F#' | 'G' | 'G#' | 'A' | 'A#' | 'B';
 
 export type ScaleType = 'Major' | 'Minor' | 'Dorian' | 'Phrygian' | 'Lydian' | 'Mixolydian' | 'Harmonic Minor';
+
+export type SectionType = 'all' | 'chord' | 'melody' | 'bass' | 'arp';
 
 export interface ChordProgressionRequest {
   rootNote: RootNote;

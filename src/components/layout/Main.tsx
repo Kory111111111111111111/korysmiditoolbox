@@ -6,10 +6,11 @@ import PianoRollPreview from '@/components/PianoRollPreview';
 interface MainProps {
   notesCount: number;
   onOpenPianoRoll: () => void;
+  onSectionClick?: (sectionType: string) => void;
   children?: React.ReactNode;
 }
 
-export function Main({ notesCount, onOpenPianoRoll, children }: MainProps) {
+export function Main({ notesCount, onOpenPianoRoll, onSectionClick, children }: MainProps) {
   return (
     <main className="flex-1 bg-gradient-to-br from-gray-900 via-gray-900 to-gray-800 relative overflow-hidden" role="main">
       {/* Background decorative elements */}
@@ -99,7 +100,7 @@ export function Main({ notesCount, onOpenPianoRoll, children }: MainProps) {
                       backgroundSize: '20px 20px'
                     }} aria-hidden="true" />
                     <div className="relative">
-                      <PianoRollPreview />
+                      <PianoRollPreview onSectionClick={onSectionClick} />
                     </div>
                   </div>
                 </div>

@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { useApp } from '@/context/AppContext';
-import { MidiNote, PianoRollDimensions, RootNote, ScaleType } from '@/types';
-import { getNoteName, getScaleIntervals, getMidiNoteNumber } from '@/utils/midiUtils';
+import { MidiNote, PianoRollDimensions, RootNote, ScaleType, SectionType } from '@/types';
+import { getNoteName, getScaleIntervals, getMidiNoteNumber, segmentNotesForPreview } from '@/utils/midiUtils';
 
 interface PianoRollProps {
   dimensions: PianoRollDimensions;
@@ -27,7 +27,7 @@ interface ClipboardNote {
 let clipboard: ClipboardNote[] = [];
 
 export default function PianoRoll({ dimensions }: PianoRollProps) {
-  const { state, addNote, updateNote, deleteNote, selectNote } = useApp();
+  const { state, addNote, updateNote, deleteNote, selectNote, setEditingSection } = useApp();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [dragMode, setDragMode] = useState<DragMode>('none');
   const [selectionBox, setSelectionBox] = useState<SelectionBox | null>(null);
@@ -45,6 +45,18 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
   const quantDivisionsPerBeat = 4; // 16th notes
   const secondsPerBeat = 0.5; // assuming 120 BPM mapping used elsewhere
   const quantUnitSec = secondsPerBeat / quantDivisionsPerBeat; // 0.125s
+
+  // Filter notes based on editing section
+  const getFilteredNotes = useCallback((): MidiNote[] => {
+    if (state.editingSection === 'all') {
+      return state.notes;
+    }
+    
+    const segmented = segmentNotesForPreview(state.notes);
+    return segmented[state.editingSection] || [];
+  }, [state.notes, state.editingSection]);
+
+  const filteredNotes = getFilteredNotes();
 
   // Generate piano keys (C4 to C6) - More focused range
   const minNote = 60; // C4
@@ -138,7 +150,7 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
     }
 
     // Draw notes with gradient, rounded corners and glow
-    state.notes.forEach(note => {
+    filteredNotes.forEach(note => {
       const noteY = (maxNote - note.pitch) * noteHeight + 0.5;
       const noteX = note.startTime * (beatWidth / 2);
       const noteWidth = Math.max(2, note.duration * (beatWidth / 2));
@@ -245,9 +257,14 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
         case 'backspace':
           e.preventDefault();
           if (selectedNotes.size > 0) {
-            selectedNotes.forEach(noteId => deleteNote(noteId));
+            // Only delete notes that are in the current filtered view
+            selectedNotes.forEach(noteId => {
+              if (filteredNotes.some(n => n.id === noteId)) {
+                deleteNote(noteId);
+              }
+            });
             setSelectedNotes(new Set());
-          } else if (state.selectedNoteId) {
+          } else if (state.selectedNoteId && filteredNotes.some(n => n.id === state.selectedNoteId)) {
             deleteNote(state.selectedNoteId);
           }
           break;
@@ -255,7 +272,7 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
         case 'a':
           if (e.ctrlKey || e.metaKey) {
             e.preventDefault();
-            const allNoteIds = new Set(state.notes.map(n => n.id));
+            const allNoteIds = new Set(filteredNotes.map(n => n.id));
             setSelectedNotes(allNoteIds);
           }
           break;
@@ -264,9 +281,9 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
           if (e.ctrlKey || e.metaKey) {
             e.preventDefault();
             const notesToCopy = selectedNotes.size > 0 
-              ? state.notes.filter(n => selectedNotes.has(n.id))
+              ? filteredNotes.filter(n => selectedNotes.has(n.id))
               : state.selectedNoteId 
-                ? state.notes.filter(n => n.id === state.selectedNoteId)
+                ? filteredNotes.filter(n => n.id === state.selectedNoteId)
                 : [];
             
             if (notesToCopy.length > 0) {
@@ -397,7 +414,7 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
   };
 
   const findNoteAtPosition = (x: number, y: number): { note: MidiNote; resizeType: 'resize-start' | 'resize-end' | 'move' } | null => {
-    for (const note of state.notes) {
+    for (const note of filteredNotes) {
       const noteY = (maxNote - note.pitch) * noteHeight;
       const noteX = note.startTime * (beatWidth / 2);
       const noteWidth = note.duration * (beatWidth / 2);
@@ -490,7 +507,7 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
       
       const selectedNoteIds = new Set<string>();
       
-      state.notes.forEach(note => {
+      filteredNotes.forEach(note => {
         const noteY = (maxNote - note.pitch) * noteHeight;
         const noteX = note.startTime * (beatWidth / 2);
         const noteWidth = note.duration * (beatWidth / 2);
@@ -567,7 +584,7 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
         const timeDelta = newStartTime - origin.original.startTime;
         
         selectedNotes.forEach(noteId => {
-          const selectedNote = state.notes.find(n => n.id === noteId);
+          const selectedNote = filteredNotes.find(n => n.id === noteId);
           if (selectedNote && noteId !== origin.noteId) {
             const newPitch = Math.max(minNote, Math.min(maxNote, selectedNote.pitch + pitchDelta));
             const newTime = Math.max(0, selectedNote.startTime + timeDelta);
@@ -648,9 +665,48 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
     }
   };
 
+  const sectionOptions: { value: SectionType; label: string; color: string }[] = [
+    { value: 'all', label: 'All Parts', color: 'text-white' },
+    { value: 'chord', label: 'Chord', color: 'text-blue-400' },
+    { value: 'melody', label: 'Melody', color: 'text-green-400' },
+    { value: 'bass', label: 'Bass', color: 'text-yellow-400' },
+    { value: 'arp', label: 'Arp', color: 'text-purple-400' }
+  ];
+
+  const currentSection = sectionOptions.find(opt => opt.value === state.editingSection) || sectionOptions[0];
+
   return (
-    <div className="flex bg-gray-900 relative">
-      {/* Piano Keyboard */}
+    <div className="flex flex-col bg-gray-900 relative">
+      {/* Section Selector Header */}
+      <div className="bg-gray-800 border-b border-gray-700 px-4 py-3 flex items-center justify-between">
+        <div className="flex items-center space-x-4">
+          <h2 className="text-lg font-semibold text-white">Piano Roll Editor</h2>
+          <div className="flex items-center space-x-2">
+            <span className="text-sm text-gray-400">Editing:</span>
+            <select
+              value={state.editingSection}
+              onChange={(e) => setEditingSection(e.target.value as SectionType)}
+              className="bg-gray-700 border border-gray-600 rounded px-3 py-1 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+            >
+              {sectionOptions.map(option => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <span className={`text-sm font-medium ${currentSection.color}`}>
+              ({filteredNotes.length} notes)
+            </span>
+          </div>
+        </div>
+        <div className="text-xs text-gray-400">
+          {state.editingSection === 'all' ? 'Editing all notes' : `Editing only ${currentSection.label.toLowerCase()} notes`}
+        </div>
+      </div>
+
+      {/* Main Editor */}
+      <div className="flex flex-1">
+        {/* Piano Keyboard */}
       <div className="w-20 bg-gray-950 border-r border-gray-800 relative">
         <div className="h-full overflow-hidden">
           {Array.from({ length: noteRange }, (_, i) => {
@@ -712,7 +768,7 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
           ref={canvasRef}
           width={width}
           height={height}
-          className="block cursor-crosshair focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-gray-900"
+          className="block focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-gray-900"
           onMouseDown={handleMouseDown}
           onMouseUp={handleMouseUp}
           onMouseMove={handleMouseMove}
@@ -833,7 +889,8 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
               </div>
             </div>
           </div>
-        )}
+        )}      
+      </div>
       </div>
     </div>
   );

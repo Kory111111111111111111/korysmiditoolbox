@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useReducer, useEffect, ReactNode } from 'react';
-import { AppState, MidiNote, AppSettings, RootNote, ScaleType } from '@/types';
+import { AppState, MidiNote, AppSettings, RootNote, ScaleType, SectionType } from '@/types';
 import { useUndoRedo } from '@/hooks/useUndoRedo';
 import { useKeyboardShortcuts, commonShortcuts, platformShortcut } from '@/hooks/useKeyboardShortcuts';
 
@@ -13,6 +13,7 @@ interface AppContextType {
   clearNotes: () => void;
   setRootNote: (rootNote: RootNote) => void;
   setScaleType: (scaleType: ScaleType) => void;
+  setEditingSection: (section: SectionType) => void;
   updateSettings: (settings: Partial<AppSettings>) => void;
   // Undo/Redo functionality
   undo: () => void;
@@ -31,6 +32,7 @@ type AppAction =
   | { type: 'CLEAR_NOTES' }
   | { type: 'SET_ROOT_NOTE'; payload: RootNote }
   | { type: 'SET_SCALE_TYPE'; payload: ScaleType }
+  | { type: 'SET_EDITING_SECTION'; payload: SectionType }
   | { type: 'SET_PLAYING'; payload: boolean }
   | { type: 'SET_CURRENT_TIME'; payload: number }
   | { type: 'UPDATE_SETTINGS'; payload: Partial<AppSettings> }
@@ -50,7 +52,8 @@ const defaultState: AppState = {
   currentTime: 0,
   rootNote: 'C',
   scaleType: 'Major',
-  settings: defaultSettings
+  settings: defaultSettings,
+  editingSection: 'all'
 };
 
 function appReducer(state: AppState, action: AppAction): AppState {
@@ -95,6 +98,11 @@ function appReducer(state: AppState, action: AppAction): AppState {
       return {
         ...state,
         scaleType: action.payload
+      };
+    case 'SET_EDITING_SECTION':
+      return {
+        ...state,
+        editingSection: action.payload
       };
     case 'SET_PLAYING':
       return {
@@ -250,6 +258,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     dispatch({ type: 'SET_SCALE_TYPE', payload: scaleType });
   };
 
+  const setEditingSection = (section: SectionType) => {
+    dispatch({ type: 'SET_EDITING_SECTION', payload: section });
+  };
+
   const updateSettings = (settings: Partial<AppSettings>) => {
     dispatch({ type: 'UPDATE_SETTINGS', payload: settings });
   };
@@ -264,6 +276,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     clearNotes,
     setRootNote,
     setScaleType,
+    setEditingSection,
     updateSettings,
     undo,
     redo,

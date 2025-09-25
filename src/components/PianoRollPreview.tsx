@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useApp } from '@/context/AppContext';
-import { MidiNote } from '@/types';
+import { MidiNote, SectionType } from '@/types';
 import { drawMiniPianoRoll, segmentNotesForPreview } from '@/utils/midiUtils';
 import { getNoteName } from '@/utils/midiUtils';
 
@@ -10,9 +10,10 @@ interface SectionProps {
   theme: 'light' | 'dark';
   style: { top: string; bottom: string; border: string; glow: string };
   playheadX?: number;
+  onSectionClick?: (sectionType: string) => void;
 }
 
-function MiniSection({ title, notes, theme, style, playheadX }: SectionProps) {
+function MiniSection({ title, notes, theme, style, playheadX, onSectionClick }: SectionProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [hoverX, setHoverX] = useState<number | null>(null);
 
@@ -57,7 +58,7 @@ function MiniSection({ title, notes, theme, style, playheadX }: SectionProps) {
           <span className="hidden md:inline">{rangeLabel}</span>
         </div>
       </div>
-      <div className="bg-gray-900 rounded-lg border border-gray-800 overflow-hidden shadow-inner">
+      <div className="bg-gray-900 rounded-lg border border-gray-800 overflow-hidden shadow-inner cursor-pointer hover:border-gray-600 transition-colors" onClick={() => onSectionClick?.(title.toLowerCase())}>
         <canvas
           ref={canvasRef}
           width={canvasWidth}
@@ -74,8 +75,12 @@ function MiniSection({ title, notes, theme, style, playheadX }: SectionProps) {
   );
 }
 
-export default function PianoRollPreview() {
-  const { state } = useApp();
+interface PianoRollPreviewProps {
+  onSectionClick?: (sectionType: SectionType) => void;
+}
+
+export default function PianoRollPreview({ onSectionClick }: PianoRollPreviewProps = {}) {
+  const { state, setEditingSection } = useApp();
   const theme = 'dark';
   
   // Calculate consistent beatWidth for playhead
@@ -83,6 +88,12 @@ export default function PianoRollPreview() {
 
   const segmented = useMemo(() => segmentNotesForPreview(state.notes), [state.notes]);
   const playheadX = state.currentTime * (beatWidth / 2); // keep preview in sync with editor scaling
+
+  const handleSectionClick = (sectionType: string) => {
+    const section = sectionType as SectionType;
+    setEditingSection(section);
+    onSectionClick?.(section);
+  };
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -92,6 +103,7 @@ export default function PianoRollPreview() {
         theme={theme}
         style={{ top: '#22c55e', bottom: '#16a34a', border: '#10b981', glow: 'rgba(34,197,94,0.35)' }}
         playheadX={playheadX}
+        onSectionClick={handleSectionClick}
       />
       <MiniSection
         title="Melody"
@@ -99,6 +111,7 @@ export default function PianoRollPreview() {
         theme={theme}
         style={{ top: '#60a5fa', bottom: '#3b82f6', border: '#0ea5e9', glow: 'rgba(96,165,250,0.35)' }}
         playheadX={playheadX}
+        onSectionClick={handleSectionClick}
       />
       <MiniSection
         title="Bass"
@@ -106,6 +119,7 @@ export default function PianoRollPreview() {
         theme={theme}
         style={{ top: '#f59e0b', bottom: '#d97706', border: '#f59e0b', glow: 'rgba(245,158,11,0.35)' }}
         playheadX={playheadX}
+        onSectionClick={handleSectionClick}
       />
       <MiniSection
         title="Arp"
@@ -113,6 +127,7 @@ export default function PianoRollPreview() {
         theme={theme}
         style={{ top: '#a78bfa', bottom: '#8b5cf6', border: '#a78bfa', glow: 'rgba(167,139,250,0.35)' }}
         playheadX={playheadX}
+        onSectionClick={handleSectionClick}
       />
     </div>
   );

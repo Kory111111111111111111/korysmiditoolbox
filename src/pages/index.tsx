@@ -31,7 +31,6 @@ function MainApp() {
   const audioService = useRef<AudioService | null>(null);
   const midiExportService = useRef<MidiExportService | null>(null);
   const rafRef = useRef<number | null>(null);
-  const lastTsRef = useRef<number | null>(null);
 
   // Initialize services
   useEffect(() => {
@@ -140,17 +139,33 @@ function MainApp() {
     }
   };
 
-  const handlePlay = () => {
-    dispatch({ type: 'SET_PLAYING', payload: true });
-    midiAnnouncements.playbackStarted();
+  const handlePlay = async () => {
+    if (audioService.current && state.notes.length > 0) {
+      try {
+        // Always start fresh playback from current time
+        await audioService.current.playSequence(state.notes, (time) => {
+          dispatch({ type: 'SET_CURRENT_TIME', payload: time });
+        });
+        dispatch({ type: 'SET_PLAYING', payload: true });
+        midiAnnouncements.playbackStarted();
+      } catch (error) {
+        console.error('Failed to start playback:', error);
+      }
+    }
   };
 
   const handlePause = () => {
+    if (audioService.current) {
+      audioService.current.pause();
+    }
     dispatch({ type: 'SET_PLAYING', payload: false });
     midiAnnouncements.playbackStopped();
   };
 
   const handleStop = () => {
+    if (audioService.current) {
+      audioService.current.stop();
+    }
     dispatch({ type: 'SET_PLAYING', payload: false });
     dispatch({ type: 'SET_CURRENT_TIME', payload: 0 });
     midiAnnouncements.playbackStopped();
@@ -226,32 +241,51 @@ function MainApp() {
 
   useKeyboardShortcuts({ shortcuts });
 
-  // Simple playback clock updating currentTime in context
+  // Monitor audio playback state
   useEffect(() => {
-    if (!state.isPlaying) {
+    if (!audioService.current) return;
+
+    const checkPlaybackEnd = () => {
+      if (state.isPlaying && audioService.current) {
+        const currentTime = audioService.current.getCurrentTime();
+        // Find the latest note end time
+        const maxEndTime = state.notes.reduce((max, note) => 
+          Math.max(max, note.startTime + note.duration), 0
+        );
+        
+        // If current time exceeds the last note, stop playback
+        if (currentTime >= maxEndTime) {
+          handleStop();
+        }
+      }
+    };
+
+    const interval = setInterval(checkPlaybackEnd, 100);
+    return () => clearInterval(interval);
+  }, [state.isPlaying, state.notes]);
+
+  // Update current time from audio service when playing
+  useEffect(() => {
+    if (!state.isPlaying || !audioService.current) {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
-      lastTsRef.current = null;
       return;
     }
 
-    const update = (timestamp: number) => {
-      if (lastTsRef.current == null) {
-        lastTsRef.current = timestamp;
+    const update = () => {
+      if (audioService.current && state.isPlaying) {
+        const currentTime = audioService.current.getCurrentTime();
+        dispatch({ type: 'SET_CURRENT_TIME', payload: currentTime });
+        rafRef.current = requestAnimationFrame(update);
       }
-      const deltaMs = timestamp - lastTsRef.current;
-      lastTsRef.current = timestamp;
-      const deltaSec = deltaMs / 1000;
-      dispatch({ type: 'SET_CURRENT_TIME', payload: state.currentTime + deltaSec });
-      rafRef.current = requestAnimationFrame(update);
     };
     rafRef.current = requestAnimationFrame(update);
+    
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
-      lastTsRef.current = null;
     };
-  }, [state.isPlaying, state.currentTime, dispatch]);
+  }, [state.isPlaying, dispatch]);
 
   const pianoRollDimensions: PianoRollDimensions = {
     width: 1000,
@@ -277,6 +311,7 @@ function MainApp() {
       <Main 
         notesCount={state.notes.length}
         onOpenPianoRoll={() => setShowPianoRoll(true)}
+        onSectionClick={() => setShowPianoRoll(true)}
       >
         <ControlPanel
           onGenerate={handleGenerate}

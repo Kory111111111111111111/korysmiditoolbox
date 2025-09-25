@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Button } from '@/components/ui/Button';
 import { useApp } from '@/context/AppContext';
-import { MidiNote } from '@/types';
+import { MidiNote, RootNote } from '@/types';
 import { getMidiNoteNumber } from '@/utils/midiUtils';
 import { 
   SparklesIcon, 
@@ -73,8 +73,7 @@ export function ChordTemplates({ onClose }: ChordTemplatesProps) {
     : CHORD_TEMPLATES.filter(t => t.category === selectedCategory);
 
   const generateChord = (template: ChordTemplate, octave: number = 4) => {
-    const rootNote = getMidiNoteNumber(state.rootNote as keyof typeof rootNoteMap, octave);
-    const rootNoteMap = { C: 0, 'C#': 1, D: 2, 'D#': 3, E: 4, F: 5, 'F#': 6, G: 7, 'G#': 8, A: 9, 'A#': 10, B: 11 };
+    const rootNote = getMidiNoteNumber(state.rootNote as RootNote, octave);
     const startTime = 0;
     const duration = 2; // 2 seconds
     
@@ -96,8 +95,7 @@ export function ChordTemplates({ onClose }: ChordTemplatesProps) {
 
   const generateProgression = (progression: typeof CHORD_PROGRESSIONS[0]) => {
     clearNotes();
-    const rootNoteMap = { C: 0, 'C#': 1, D: 2, 'D#': 3, E: 4, F: 5, 'F#': 6, G: 7, 'G#': 8, A: 9, 'A#': 10, B: 11 };
-    const rootNote = getMidiNoteNumber(state.rootNote as keyof typeof rootNoteMap, 4);
+    const rootNote = getMidiNoteNumber(state.rootNote as RootNote, 4);
     const chordDuration = 2;
     
     progression.chords.forEach((chordType, chordIndex) => {

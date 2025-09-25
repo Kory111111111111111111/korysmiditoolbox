@@ -227,7 +227,7 @@ export const touchUtils = {
       const ripple = document.createElement('div');
       
       // Position ripple
-      const touch = (event as any).touches?.[0] || event as MouseEvent;
+      const touch = (event as unknown as TouchEvent).touches?.[0] || event as MouseEvent;
       const x = (touch.clientX - rect.left);
       const y = (touch.clientY - rect.top);
       
@@ -315,7 +315,7 @@ export const orientationUtils = {
       landscape: 'landscape-primary'
     };
     
-    return screen.orientation.lock(orientationMap[orientation] as OrientationLockType);
+    return (screen.orientation as unknown as { lock: (orientation: string) => Promise<void> }).lock(orientationMap[orientation]);
   }
 };
 
@@ -344,7 +344,7 @@ export const safeAreaUtils = {
 // Performance utilities for mobile
 export const mobilePerformanceUtils = {
   // Throttle touch events for better performance
-  throttleTouch<T extends any[]>(
+  throttleTouch<T extends unknown[]>(
     func: (...args: T) => void,
     delay: number
   ): (...args: T) => void {
@@ -359,7 +359,7 @@ export const mobilePerformanceUtils = {
   },
   
   // Debounce resize events
-  debounceResize<T extends any[]>(
+  debounceResize<T extends unknown[]>(
     func: (...args: T) => void,
     delay: number = 250
   ): (...args: T) => void {
@@ -372,8 +372,8 @@ export const mobilePerformanceUtils = {
   
   // Optimize scroll performance
   optimizeScrolling(element: HTMLElement): void {
-    element.style.webkitOverflowScrolling = 'touch';
-    element.style.overflowScrolling = 'touch';
+    (element.style as unknown as { webkitOverflowScrolling: string; overflowScrolling: string }).webkitOverflowScrolling = 'touch';
+    (element.style as unknown as { webkitOverflowScrolling: string; overflowScrolling: string }).overflowScrolling = 'touch';
     element.style.willChange = 'scroll-position';
   }
 };

@@ -40,7 +40,7 @@ export function useKeyboardShortcuts({
       return;
     }
 
-    for (const [id, shortcut] of Object.entries(shortcutsRef.current)) {
+    for (const [, shortcut] of Object.entries(shortcutsRef.current)) {
       const matches = (
         event.key.toLowerCase() === shortcut.key.toLowerCase() &&
         !!event.ctrlKey === !!shortcut.ctrlKey &&

@@ -15,10 +15,10 @@ import { MidiExportService } from '@/services/midiExportService';
 import { getDefaultProgression } from '@/utils/defaultProgression';
 import { PianoRollDimensions, RootNote, ScaleType } from '@/types';
 import { useKeyboardShortcuts, commonShortcuts, platformShortcut } from '@/hooks/useKeyboardShortcuts';
-import { midiAnnouncements, FocusManager } from '@/utils/accessibility';
+import { midiAnnouncements } from '@/utils/accessibility';
 
 function MainApp() {
-  const { state, dispatch, clearNotes, updateSettings, undo, redo, canUndo, canRedo, getUndoDescription, getRedoDescription } = useApp();
+  const { state, dispatch, clearNotes, updateSettings } = useApp();
   const { success, error } = useToastActions();
   const [showSettings, setShowSettings] = useState(false);
   const [showPianoRoll, setShowPianoRoll] = useState(false);

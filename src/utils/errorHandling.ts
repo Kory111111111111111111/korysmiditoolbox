@@ -14,7 +14,7 @@ export enum ErrorType {
 export interface EnhancedError extends Error {
   type: ErrorType;
   code?: string;
-  details?: Record<string, any>;
+  details?: Record<string, unknown>;
   timestamp: number;
   retryable?: boolean;
   severity: 'low' | 'medium' | 'high' | 'critical';
@@ -101,7 +101,7 @@ class ErrorLogger {
     this.sendToExternalService(error);
   }
   
-  private getLogMethod(severity: string): (...args: any[]) => void {
+  private getLogMethod(severity: string): (...args: unknown[]) => void {
     switch (severity) {
       case 'critical':
       case 'high':
@@ -299,9 +299,9 @@ export const errorUtils = {
   },
   
   // Check if error is retryable
-  isRetryable: (error: any): boolean => {
-    if (error && typeof error === 'object' && 'retryable' in error) {
-      return error.retryable;
+  isRetryable: (error: unknown): boolean => {
+    if (error && typeof error === 'object' && error !== null && 'retryable' in error) {
+      return (error as { retryable: boolean }).retryable;
     }
     return false;
   }

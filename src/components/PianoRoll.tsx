@@ -227,7 +227,7 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
       ctx.lineTo(playheadX, pianoHeight);
       ctx.stroke();
     }
-  }, [state, width, height, noteHeight, beatWidth, gridWidth, noteRange, pianoHeight, totalBeats]);
+  }, [state, width, height, noteHeight, beatWidth, gridWidth, noteRange, pianoHeight, totalBeats, isSelecting, selectedNotes, selectionBox]);
 
   useEffect(() => {
     draw();

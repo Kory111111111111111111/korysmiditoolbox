@@ -211,7 +211,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     
     // Save to undo/redo history
     saveState(state);
-  }, [state.notes, state.rootNote, state.scaleType, saveState]);
+  }, [state, saveState]);
 
   // Save settings to localStorage whenever they change
   useEffect(() => {

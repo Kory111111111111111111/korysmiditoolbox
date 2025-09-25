@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useReducer, useEffect, ReactNode } from 'react';
-import { AppState, MidiNote, AppSettings, RootNote, ScaleType, SectionType } from '@/types';
+import { AppState, MidiNote, AppSettings, RootNote, ScaleType, SectionType, AudioSectionType, AudioTrackState } from '@/types';
 import { useUndoRedo } from '@/hooks/useUndoRedo';
 import { useKeyboardShortcuts, commonShortcuts, platformShortcut } from '@/hooks/useKeyboardShortcuts';
 
@@ -15,6 +15,16 @@ interface AppContextType {
   setScaleType: (scaleType: ScaleType) => void;
   setEditingSection: (section: SectionType) => void;
   updateSettings: (settings: Partial<AppSettings>) => void;
+  // Audio control methods
+  setTrackVolume: (sectionId: AudioSectionType, volume: number) => void;
+  setTrackPan: (sectionId: AudioSectionType, pan: number) => void;
+  setTrackMute: (sectionId: AudioSectionType, muted: boolean) => void;
+  setTrackSolo: (sectionId: AudioSectionType, soloed: boolean) => void;
+  setMasterVolume: (volume: number) => void;
+  setTempo: (tempo: number) => void;
+  setMetronome: (enabled: boolean) => void;
+  setLoop: (enabled: boolean, start?: number, end?: number) => void;
+  updateAudioLevels: (levels: { [key: string]: number }) => void;
   // Undo/Redo functionality
   undo: () => void;
   redo: () => void;
@@ -36,6 +46,15 @@ type AppAction =
   | { type: 'SET_PLAYING'; payload: boolean }
   | { type: 'SET_CURRENT_TIME'; payload: number }
   | { type: 'UPDATE_SETTINGS'; payload: Partial<AppSettings> }
+  | { type: 'SET_TRACK_VOLUME'; payload: { sectionId: AudioSectionType; volume: number } }
+  | { type: 'SET_TRACK_PAN'; payload: { sectionId: AudioSectionType; pan: number } }
+  | { type: 'SET_TRACK_MUTE'; payload: { sectionId: AudioSectionType; muted: boolean } }
+  | { type: 'SET_TRACK_SOLO'; payload: { sectionId: AudioSectionType; soloed: boolean } }
+  | { type: 'SET_MASTER_VOLUME'; payload: number }
+  | { type: 'SET_TEMPO'; payload: number }
+  | { type: 'SET_METRONOME'; payload: boolean }
+  | { type: 'SET_LOOP'; payload: { enabled: boolean; start?: number; end?: number } }
+  | { type: 'UPDATE_AUDIO_LEVELS'; payload: { [key: string]: number } }
   | { type: 'LOAD_STATE'; payload: Partial<AppState> };
 
 const defaultSettings: AppSettings = {
@@ -43,6 +62,13 @@ const defaultSettings: AppSettings = {
   theme: 'dark',
   snapToGrid: true,
   snapToScale: true
+};
+
+const defaultAudioTrackState: AudioTrackState = {
+  volume: 80,
+  pan: 0,
+  muted: false,
+  soloed: false
 };
 
 const defaultState: AppState = {
@@ -53,7 +79,22 @@ const defaultState: AppState = {
   rootNote: 'C',
   scaleType: 'Major',
   settings: defaultSettings,
-  editingSection: 'all'
+  editingSection: 'all',
+  audio: {
+    tracks: {
+      chord: { ...defaultAudioTrackState },
+      melody: { ...defaultAudioTrackState },
+      bass: { ...defaultAudioTrackState },
+      arp: { ...defaultAudioTrackState }
+    },
+    masterVolume: 80,
+    tempo: 120,
+    metronome: false,
+    loop: false,
+    loopStart: 0,
+    loopEnd: 16,
+    audioLevels: {}
+  }
 };
 
 function appReducer(state: AppState, action: AppAction): AppState {
@@ -118,6 +159,104 @@ function appReducer(state: AppState, action: AppAction): AppState {
       return {
         ...state,
         settings: { ...state.settings, ...action.payload }
+      };
+    case 'SET_TRACK_VOLUME':
+      return {
+        ...state,
+        audio: {
+          ...state.audio,
+          tracks: {
+            ...state.audio.tracks,
+            [action.payload.sectionId]: {
+              ...state.audio.tracks[action.payload.sectionId],
+              volume: action.payload.volume
+            }
+          }
+        }
+      };
+    case 'SET_TRACK_PAN':
+      return {
+        ...state,
+        audio: {
+          ...state.audio,
+          tracks: {
+            ...state.audio.tracks,
+            [action.payload.sectionId]: {
+              ...state.audio.tracks[action.payload.sectionId],
+              pan: action.payload.pan
+            }
+          }
+        }
+      };
+    case 'SET_TRACK_MUTE':
+      return {
+        ...state,
+        audio: {
+          ...state.audio,
+          tracks: {
+            ...state.audio.tracks,
+            [action.payload.sectionId]: {
+              ...state.audio.tracks[action.payload.sectionId],
+              muted: action.payload.muted
+            }
+          }
+        }
+      };
+    case 'SET_TRACK_SOLO':
+      return {
+        ...state,
+        audio: {
+          ...state.audio,
+          tracks: {
+            ...state.audio.tracks,
+            [action.payload.sectionId]: {
+              ...state.audio.tracks[action.payload.sectionId],
+              soloed: action.payload.soloed
+            }
+          }
+        }
+      };
+    case 'SET_MASTER_VOLUME':
+      return {
+        ...state,
+        audio: {
+          ...state.audio,
+          masterVolume: action.payload
+        }
+      };
+    case 'SET_TEMPO':
+      return {
+        ...state,
+        audio: {
+          ...state.audio,
+          tempo: action.payload
+        }
+      };
+    case 'SET_METRONOME':
+      return {
+        ...state,
+        audio: {
+          ...state.audio,
+          metronome: action.payload
+        }
+      };
+    case 'SET_LOOP':
+      return {
+        ...state,
+        audio: {
+          ...state.audio,
+          loop: action.payload.enabled,
+          ...(action.payload.start !== undefined && { loopStart: action.payload.start }),
+          ...(action.payload.end !== undefined && { loopEnd: action.payload.end })
+        }
+      };
+    case 'UPDATE_AUDIO_LEVELS':
+      return {
+        ...state,
+        audio: {
+          ...state.audio,
+          audioLevels: action.payload
+        }
       };
     case 'LOAD_STATE':
       return {
@@ -266,6 +405,43 @@ export function AppProvider({ children }: { children: ReactNode }) {
     dispatch({ type: 'UPDATE_SETTINGS', payload: settings });
   };
 
+  // Audio control methods
+  const setTrackVolume = (sectionId: AudioSectionType, volume: number) => {
+    dispatch({ type: 'SET_TRACK_VOLUME', payload: { sectionId, volume } });
+  };
+
+  const setTrackPan = (sectionId: AudioSectionType, pan: number) => {
+    dispatch({ type: 'SET_TRACK_PAN', payload: { sectionId, pan } });
+  };
+
+  const setTrackMute = (sectionId: AudioSectionType, muted: boolean) => {
+    dispatch({ type: 'SET_TRACK_MUTE', payload: { sectionId, muted } });
+  };
+
+  const setTrackSolo = (sectionId: AudioSectionType, soloed: boolean) => {
+    dispatch({ type: 'SET_TRACK_SOLO', payload: { sectionId, soloed } });
+  };
+
+  const setMasterVolume = (volume: number) => {
+    dispatch({ type: 'SET_MASTER_VOLUME', payload: volume });
+  };
+
+  const setTempo = (tempo: number) => {
+    dispatch({ type: 'SET_TEMPO', payload: tempo });
+  };
+
+  const setMetronome = (enabled: boolean) => {
+    dispatch({ type: 'SET_METRONOME', payload: enabled });
+  };
+
+  const setLoop = (enabled: boolean, start?: number, end?: number) => {
+    dispatch({ type: 'SET_LOOP', payload: { enabled, start, end } });
+  };
+
+  const updateAudioLevels = (levels: { [key: string]: number }) => {
+    dispatch({ type: 'UPDATE_AUDIO_LEVELS', payload: levels });
+  };
+
   const value: AppContextType = {
     state,
     dispatch,
@@ -278,6 +454,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setScaleType,
     setEditingSection,
     updateSettings,
+    setTrackVolume,
+    setTrackPan,
+    setTrackMute,
+    setTrackSolo,
+    setMasterVolume,
+    setTempo,
+    setMetronome,
+    setLoop,
+    updateAudioLevels,
     undo,
     redo,
     canUndo,

@@ -1,5 +1,7 @@
 import React from 'react';
 import { Button } from '@/components/ui/Button';
+import { useApp } from '@/context/AppContext';
+import { CompactAudioVisualizer } from '@/components/AudioVisualizer';
 import { 
   SpeakerWaveIcon,
   PlayIcon,
@@ -8,7 +10,9 @@ import {
   ArrowLeftIcon,
   ArrowRightIcon,
   ArrowPathIcon,
-  MusicalNoteIcon
+  MusicalNoteIcon,
+  AdjustmentsHorizontalIcon,
+  SpeakerXMarkIcon
 } from '@heroicons/react/24/outline';
 
 interface FooterProps {
@@ -21,6 +25,7 @@ interface FooterProps {
   bpm: number;
   onBpmChange: (bpm: number) => void;
   keySignature: string;
+  onOpenMixer?: () => void;
 }
 
 export function Footer({ 
@@ -28,12 +33,14 @@ export function Footer({
   onPlay, 
   onPause, 
   onStop, 
-  volume, 
+  volume: _volume, 
   onVolumeChange, 
-  bpm, 
+  bpm: _bpm, 
   onBpmChange,
-  keySignature 
+  keySignature,
+  onOpenMixer
 }: FooterProps) {
+  const { state, setTempo, setMetronome, setLoop, setMasterVolume } = useApp();
   return (
     <footer className="bg-gray-900/95 backdrop-blur-md border-t border-gray-800/50 px-4 sm:px-6 py-3 sm:py-4 relative" role="contentinfo">
       {/* Gradient background */}
@@ -44,23 +51,36 @@ export function Footer({
           {/* Volume Control */}
           <div className="flex items-center space-x-3 sm:space-x-4 min-w-0 order-2 lg:order-1">
             <div className="flex items-center space-x-2 sm:space-x-3 bg-gray-800/30 rounded-xl px-3 sm:px-4 py-2 backdrop-blur-sm border border-gray-700/50">
-              <SpeakerWaveIcon className="w-4 h-4 sm:w-5 sm:h-5 text-gray-400 flex-shrink-0" aria-hidden="true" />
+              <button
+                onClick={() => setMasterVolume(state.audio.masterVolume > 0 ? 0 : 80)}
+                className="text-gray-400 hover:text-white transition-colors"
+              >
+                {state.audio.masterVolume === 0 ? (
+                  <SpeakerXMarkIcon className="w-4 h-4 sm:w-5 sm:h-5" aria-hidden="true" />
+                ) : (
+                  <SpeakerWaveIcon className="w-4 h-4 sm:w-5 sm:h-5" aria-hidden="true" />
+                )}
+              </button>
               <span className="text-label text-gray-400 hidden sm:inline" aria-hidden="true">Volume</span>
               <div className="relative flex-1 min-w-[60px] sm:min-w-[80px] max-w-[100px] sm:max-w-[120px]">
                 <input
                   type="range"
                   min="0"
                   max="100"
-                  value={volume}
-                  onChange={(e) => onVolumeChange(Number(e.target.value))}
+                  value={state.audio.masterVolume}
+                  onChange={(e) => {
+                    const newVolume = Number(e.target.value);
+                    setMasterVolume(newVolume);
+                    onVolumeChange(newVolume);
+                  }}
                   className="w-full h-2 bg-gray-700 rounded-full appearance-none cursor-pointer slider focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   style={{
-                    background: `linear-gradient(to right, #6366f1 0%, #6366f1 ${volume}%, #374151 ${volume}%, #374151 100%)`
+                    background: `linear-gradient(to right, #6366f1 0%, #6366f1 ${state.audio.masterVolume}%, #374151 ${state.audio.masterVolume}%, #374151 100%)`
                   }}
-                  aria-label={`Volume: ${volume}%`}
+                  aria-label={`Volume: ${state.audio.masterVolume}%`}
                 />
               </div>
-              <span className="text-caption text-gray-400 w-6 sm:w-8 text-right tabular-nums text-xs sm:text-sm" aria-hidden="true">{volume}</span>
+              <span className="text-caption text-gray-400 w-6 sm:w-8 text-right tabular-nums text-xs sm:text-sm" aria-hidden="true">{state.audio.masterVolume}</span>
             </div>
           </div>
 
@@ -71,7 +91,11 @@ export function Footer({
               <Button
                 variant="ghost"
                 size="icon-sm"
-                onClick={() => onBpmChange(Math.max(60, bpm - 5))}
+                onClick={() => {
+                  const newBpm = Math.max(60, state.audio.tempo - 5);
+                  setTempo(newBpm);
+                  onBpmChange(newBpm);
+                }}
                 className="hover:bg-gray-700/50 text-gray-400 hover:text-white w-6 h-6 sm:w-8 sm:h-8"
                 aria-label="Decrease BPM"
               >
@@ -79,14 +103,18 @@ export function Footer({
               </Button>
               
               <div className="text-center min-w-[60px] sm:min-w-[80px]">
-                <div className="text-body-sm sm:text-h6 text-white font-semibold tabular-nums">{bpm}</div>
+                <div className="text-body-sm sm:text-h6 text-white font-semibold tabular-nums">{state.audio.tempo}</div>
                 <div className="text-caption text-gray-400 text-xs">BPM</div>
               </div>
               
               <Button
                 variant="ghost"
                 size="icon-sm"
-                onClick={() => onBpmChange(Math.min(200, bpm + 5))}
+                onClick={() => {
+                  const newBpm = Math.min(200, state.audio.tempo + 5);
+                  setTempo(newBpm);
+                  onBpmChange(newBpm);
+                }}
                 className="hover:bg-gray-700/50 text-gray-400 hover:text-white w-6 h-6 sm:w-8 sm:h-8"
                 aria-label="Increase BPM"
               >
@@ -127,10 +155,44 @@ export function Footer({
               <Button
                 variant="ghost"
                 size="icon"
-                onClick={() => onBpmChange(120)}
+                onClick={() => {
+                  setTempo(120);
+                  onBpmChange(120);
+                }}
                 className="hover:bg-gray-700/50 text-gray-400 hover:text-white w-8 h-8 sm:w-10 sm:h-10"
                 title="Reset to 120 BPM"
                 aria-label="Reset BPM to 120"
+              >
+                <ArrowPathIcon className="w-3 h-3 sm:w-4 sm:h-4" />
+              </Button>
+              
+              {/* Enhanced controls */}
+              <Button
+                variant={state.audio.metronome ? "default" : "ghost"}
+                size="icon"
+                onClick={() => setMetronome(!state.audio.metronome)}
+                className={`w-8 h-8 sm:w-10 sm:h-10 ${
+                  state.audio.metronome 
+                    ? 'bg-green-600 hover:bg-green-700' 
+                    : 'hover:bg-gray-700/50 text-gray-400 hover:text-white'
+                }`}
+                title="Toggle Metronome"
+                aria-label="Toggle Metronome"
+              >
+                <MusicalNoteIcon className="w-3 h-3 sm:w-4 sm:h-4" />
+              </Button>
+              
+              <Button
+                variant={state.audio.loop ? "default" : "ghost"}
+                size="icon"
+                onClick={() => setLoop(!state.audio.loop)}
+                className={`w-8 h-8 sm:w-10 sm:h-10 ${
+                  state.audio.loop 
+                    ? 'bg-purple-600 hover:bg-purple-700' 
+                    : 'hover:bg-gray-700/50 text-gray-400 hover:text-white'
+                }`}
+                title="Toggle Loop"
+                aria-label="Toggle Loop"
               >
                 <ArrowPathIcon className="w-3 h-3 sm:w-4 sm:h-4" />
               </Button>
@@ -147,6 +209,19 @@ export function Footer({
 
           {/* Status */}
           <div className="flex items-center space-x-3 min-w-0 order-3 lg:order-3">
+            {/* Mixer Button */}
+            {onOpenMixer && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={onOpenMixer}
+                className="hidden lg:flex items-center space-x-2 bg-gray-800/30 border-gray-600 hover:border-indigo-500 hover:bg-indigo-500/10"
+              >
+                <AdjustmentsHorizontalIcon className="w-4 h-4" />
+                <span>Mixer</span>
+              </Button>
+            )}
+            
             <div className="hidden lg:flex items-center space-x-4 bg-gray-800/30 rounded-xl px-4 py-2 backdrop-blur-sm border border-gray-700/50">
               <div className="flex items-center space-x-2">
                 <div className={`w-2 h-2 rounded-full ${isPlaying ? 'bg-green-500 animate-pulse' : 'bg-gray-500'}`} aria-hidden="true" />
@@ -159,6 +234,26 @@ export function Footer({
                 <MusicalNoteIcon className="w-3 h-3" aria-hidden="true" />
                 <span>4/4</span>
               </div>
+              <div className="h-4 w-px bg-gray-700" aria-hidden="true" />
+              <CompactAudioVisualizer className="opacity-80" />
+              {state.audio.loop && (
+                <>
+                  <div className="h-4 w-px bg-gray-700" aria-hidden="true" />
+                  <div className="flex items-center space-x-1 text-caption text-purple-400">
+                    <ArrowPathIcon className="w-3 h-3" aria-hidden="true" />
+                    <span>Loop</span>
+                  </div>
+                </>
+              )}
+              {state.audio.metronome && (
+                <>
+                  <div className="h-4 w-px bg-gray-700" aria-hidden="true" />
+                  <div className="flex items-center space-x-1 text-caption text-green-400">
+                    <MusicalNoteIcon className="w-3 h-3" aria-hidden="true" />
+                    <span>Click</span>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </div>

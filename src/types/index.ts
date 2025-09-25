@@ -13,6 +13,29 @@ export interface AppSettings {
   snapToScale?: boolean;
 }
 
+export interface AudioTrackState {
+  volume: number;
+  pan: number;
+  muted: boolean;
+  soloed: boolean;
+}
+
+export interface AudioState {
+  tracks: {
+    chord: AudioTrackState;
+    melody: AudioTrackState;
+    bass: AudioTrackState;
+    arp: AudioTrackState;
+  };
+  masterVolume: number;
+  tempo: number;
+  metronome: boolean;
+  loop: boolean;
+  loopStart: number;
+  loopEnd: number;
+  audioLevels: { [key: string]: number };
+}
+
 export interface AppState {
   notes: MidiNote[];
   selectedNoteId: string | null;
@@ -22,6 +45,7 @@ export interface AppState {
   scaleType: string;
   settings: AppSettings;
   editingSection: SectionType;
+  audio: AudioState;
 }
 
 export interface PianoRollDimensions {
@@ -36,6 +60,8 @@ export type RootNote = 'C' | 'C#' | 'D' | 'D#' | 'E' | 'F' | 'F#' | 'G' | 'G#' |
 export type ScaleType = 'Major' | 'Minor' | 'Dorian' | 'Phrygian' | 'Lydian' | 'Mixolydian' | 'Harmonic Minor';
 
 export type SectionType = 'all' | 'chord' | 'melody' | 'bass' | 'arp';
+
+export type AudioSectionType = 'chord' | 'melody' | 'bass' | 'arp';
 
 export interface ChordProgressionRequest {
   rootNote: RootNote;

@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AppProvider, useApp } from '@/context/AppContext';
 import { ToastProvider, useToastActions } from '@/components/ui/Toast';
 import { Button } from '@/components/ui/Button';
 import PianoRoll from '@/components/PianoRoll';
 import SettingsPanel from '@/components/SettingsPanel';
+import MixerPanel from '@/components/MixerPanel';
 import { ChordTemplates } from '@/components/ChordTemplates';
 import { Header } from '@/components/layout/Header';
 import { Main } from '@/components/layout/Main';
@@ -13,16 +14,17 @@ import { GeminiService } from '@/services/geminiService';
 import { AudioService } from '@/services/audioService';
 import { MidiExportService } from '@/services/midiExportService';
 import { getDefaultProgression } from '@/utils/defaultProgression';
-import { PianoRollDimensions, RootNote, ScaleType } from '@/types';
+import { PianoRollDimensions, RootNote, ScaleType, AudioSectionType } from '@/types';
 import { useKeyboardShortcuts, commonShortcuts, platformShortcut } from '@/hooks/useKeyboardShortcuts';
 import { midiAnnouncements } from '@/utils/accessibility';
 
 function MainApp() {
-  const { state, dispatch, clearNotes, updateSettings } = useApp();
+  const { state, dispatch, clearNotes, updateSettings, updateAudioLevels } = useApp();
   const { success, error } = useToastActions();
   const [showSettings, setShowSettings] = useState(false);
   const [showPianoRoll, setShowPianoRoll] = useState(false);
   const [showChordTemplates, setShowChordTemplates] = useState(false);
+  const [showMixer, setShowMixer] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [volume, setVolume] = useState(100);
   const [bpm, setBpm] = useState(120);
@@ -39,7 +41,14 @@ function MainApp() {
     }
     audioService.current = new AudioService();
     midiExportService.current = new MidiExportService();
-  }, [state.settings.apiKey]);
+    
+    // Set up audio level monitoring
+    if (audioService.current) {
+      audioService.current.setLevelUpdateCallback((levels) => {
+        updateAudioLevels(levels);
+      });
+    }
+  }, [state.settings.apiKey, updateAudioLevels]);
 
   // Load default progression if no notes exist
   useEffect(() => {
@@ -142,6 +151,19 @@ function MainApp() {
   const handlePlay = async () => {
     if (audioService.current && state.notes.length > 0) {
       try {
+        // Sync audio service with app state
+        audioService.current.setTempo(state.audio.tempo);
+        audioService.current.setMetronome(state.audio.metronome);
+        audioService.current.setLoop(state.audio.loop, state.audio.loopStart, state.audio.loopEnd);
+        
+        // Sync track settings
+        Object.entries(state.audio.tracks).forEach(([sectionId, trackState]) => {
+          audioService.current!.setTrackVolume(sectionId as AudioSectionType, trackState.volume);
+          audioService.current!.setTrackPan(sectionId as AudioSectionType, trackState.pan);
+          audioService.current!.setTrackMute(sectionId as AudioSectionType, trackState.muted);
+          audioService.current!.setTrackSolo(sectionId as AudioSectionType, trackState.soloed);
+        });
+        
         // Always start fresh playback from current time
         await audioService.current.playSequence(state.notes, (time) => {
           dispatch({ type: 'SET_CURRENT_TIME', payload: time });
@@ -162,14 +184,14 @@ function MainApp() {
     midiAnnouncements.playbackStopped();
   };
 
-  const handleStop = () => {
+  const handleStop = useCallback(() => {
     if (audioService.current) {
       audioService.current.stop();
     }
     dispatch({ type: 'SET_PLAYING', payload: false });
     dispatch({ type: 'SET_CURRENT_TIME', payload: 0 });
     midiAnnouncements.playbackStopped();
-  };
+  }, [dispatch]);
 
   // Setup comprehensive keyboard shortcuts
   const shortcuts = {
@@ -186,6 +208,32 @@ function MainApp() {
     stop: {
       ...platformShortcut(commonShortcuts.stop),
       handler: handleStop
+    },
+    mixer: {
+      key: 'm',
+      ctrlKey: true,
+      description: 'Open Mixer Panel',
+      handler: () => {
+        setShowMixer(!showMixer);
+      }
+    },
+    metronome: {
+      key: 'k',
+      description: 'Toggle Metronome',
+      handler: () => {
+        if (audioService.current) {
+          audioService.current.setMetronome(!state.audio.metronome);
+        }
+      }
+    },
+    loop: {
+      key: 'l',
+      description: 'Toggle Loop',
+      handler: () => {
+        if (audioService.current) {
+          audioService.current.setLoop(!state.audio.loop);
+        }
+      }
     },
     pianoRollOpen: {
       ...platformShortcut(commonShortcuts.pianoRollOpen),
@@ -262,7 +310,7 @@ function MainApp() {
 
     const interval = setInterval(checkPlaybackEnd, 100);
     return () => clearInterval(interval);
-  }, [state.isPlaying, state.notes]);
+  }, [state.isPlaying, state.notes, handleStop]);
 
   // Update current time from audio service when playing
   useEffect(() => {
@@ -288,7 +336,7 @@ function MainApp() {
   }, [state.isPlaying, dispatch]);
 
   const pianoRollDimensions: PianoRollDimensions = {
-    width: 1000,
+    width: 4 * 4 * 50, // 4 bars × 4 beats × 50px beatWidth = 800px
     height: 400,
     noteHeight: 16,
     beatWidth: 50
@@ -333,6 +381,7 @@ function MainApp() {
         bpm={bpm}
         onBpmChange={setBpm}
         keySignature={keySignature}
+        onOpenMixer={() => setShowMixer(true)}
       />
 
       {/* Piano Roll Modal */}
@@ -489,6 +538,12 @@ function MainApp() {
       {showChordTemplates && (
         <ChordTemplates onClose={() => setShowChordTemplates(false)} />
       )}
+
+      {/* Mixer Panel */}
+      <MixerPanel
+        isOpen={showMixer}
+        onClose={() => setShowMixer(false)}
+      />
     </div>
   );
 }

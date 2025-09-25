@@ -1,7 +1,8 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { useApp } from '@/context/AppContext';
-import { MidiNote, PianoRollDimensions, RootNote, ScaleType, SectionType } from '@/types';
+import { MidiNote, PianoRollDimensions, RootNote, ScaleType, SectionType, AudioSectionType } from '@/types';
 import { getNoteName, getScaleIntervals, getMidiNoteNumber, segmentNotesForPreview } from '@/utils/midiUtils';
+import { AudioService } from '@/services/audioService';
 
 interface PianoRollProps {
   dimensions: PianoRollDimensions;
@@ -29,17 +30,44 @@ let clipboard: ClipboardNote[] = [];
 export default function PianoRoll({ dimensions }: PianoRollProps) {
   const { state, addNote, updateNote, deleteNote, selectNote, setEditingSection } = useApp();
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const audioServiceRef = useRef<AudioService | null>(null);
   const [dragMode, setDragMode] = useState<DragMode>('none');
   const [selectionBox, setSelectionBox] = useState<SelectionBox | null>(null);
   const [selectedNotes, setSelectedNotes] = useState<Set<string>>(new Set());
   const [isSelecting, setIsSelecting] = useState(false);
   const [lastClickTime, setLastClickTime] = useState(0);
   const [showHelp, setShowHelp] = useState(false);
+  const [hoveredNote, setHoveredNote] = useState<{ pitch: number; time: number } | null>(null);
   const dragOriginRef = useRef<{ x: number; y: number; noteId: string; original: MidiNote } | null>(null);
+
+  // Initialize audio service for preview
+  useEffect(() => {
+    if (!audioServiceRef.current) {
+      audioServiceRef.current = new AudioService();
+      audioServiceRef.current.initialize().catch(console.error);
+    }
+  }, []);
+
+  // Preview note on hover
+  const previewNote = useCallback(async (pitch: number, sectionId: AudioSectionType = 'melody') => {
+    if (audioServiceRef.current) {
+      try {
+        await audioServiceRef.current.previewNote(pitch, 0.6, sectionId, 0.3);
+      } catch (error) {
+        console.error('Failed to preview note:', error);
+      }
+    }
+  }, []);
+
+  // Get current section for preview
+  const getCurrentSectionForPreview = useCallback((): AudioSectionType => {
+    if (state.editingSection === 'all') return 'melody';
+    return state.editingSection as AudioSectionType;
+  }, [state.editingSection]);
 
   const { width, height, noteHeight, beatWidth } = dimensions;
   const beatsPerBar = 4;
-  const bars = 8;
+  const bars = 4; // Match preview canvas bar count for consistency
   const totalBeats = bars * beatsPerBar;
   const gridWidth = totalBeats * beatWidth;
   const quantDivisionsPerBeat = 4; // 16th notes
@@ -105,11 +133,11 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
     };
 
     // Clear canvas
-    ctx.clearRect(0, 0, width, height);
+    ctx.clearRect(0, 0, gridWidth, height);
 
     // Background
     ctx.fillStyle = bg;
-    ctx.fillRect(0, 0, width, height);
+    ctx.fillRect(0, 0, gridWidth, height);
 
     // Row shading
     for (let i = 0; i < noteRange; i++) {
@@ -239,11 +267,57 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
       ctx.lineTo(playheadX, pianoHeight);
       ctx.stroke();
     }
-  }, [state, width, height, noteHeight, beatWidth, gridWidth, noteRange, pianoHeight, totalBeats, isSelecting, selectedNotes, selectionBox]);
+
+    // Draw timeline ruler at the top
+    const rulerHeight = 30;
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.95)';
+    ctx.fillRect(0, 0, gridWidth, rulerHeight);
+    
+    // Timeline markings
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = '11px monospace';
+    
+    for (let bar = 0; bar < bars; bar++) {
+      const x = bar * beatsPerBar * beatWidth;
+      
+      // Bar numbers
+      ctx.fillStyle = '#e2e8f0';
+      ctx.fillText(`${bar + 1}`, x + (beatsPerBar * beatWidth / 2), rulerHeight / 2);
+      
+      // Beat markings
+      for (let beat = 0; beat < beatsPerBar; beat++) {
+        const beatX = x + beat * beatWidth;
+        ctx.strokeStyle = beat === 0 ? '#64748b' : '#475569';
+        ctx.lineWidth = beat === 0 ? 2 : 1;
+        ctx.beginPath();
+        ctx.moveTo(beatX, rulerHeight * 0.7);
+        ctx.lineTo(beatX, rulerHeight);
+        ctx.stroke();
+        
+        if (beat === 0) {
+          ctx.fillStyle = '#64748b';
+          ctx.fillText((beat + 1).toString(), beatX + beatWidth/2, rulerHeight * 0.8);
+        }
+      }
+    }
+    
+    // Current time indicator
+    if (state.currentTime >= 0) {
+      const currentX = state.currentTime * (beatWidth / 2);
+      ctx.fillStyle = '#f43f5e';
+      ctx.beginPath();
+      ctx.moveTo(currentX - 6, 0);
+      ctx.lineTo(currentX + 6, 0);
+      ctx.lineTo(currentX, rulerHeight * 0.6);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }, [state, gridWidth, height, noteHeight, beatWidth, noteRange, pianoHeight, totalBeats, isSelecting, selectedNotes, selectionBox, filteredNotes]);
 
   useEffect(() => {
     draw();
-  }, [draw]);
+  }, [draw, filteredNotes]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -541,6 +615,18 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
 
+    // Update hovered note for preview (only when not dragging)
+    if (dragMode === 'none') {
+      const notePosition = getNoteFromPosition(x, y);
+      if (notePosition && (!hoveredNote || hoveredNote.pitch !== notePosition.pitch)) {
+        setHoveredNote({ pitch: notePosition.pitch, time: notePosition.startTime });
+        // Preview the note
+        previewNote(notePosition.pitch, getCurrentSectionForPreview());
+      } else if (!notePosition) {
+        setHoveredNote(null);
+      }
+    }
+
     if (dragMode === 'select' && isSelecting && selectionBox) {
       // Update selection box
       setSelectionBox(prev => prev ? {
@@ -618,7 +704,7 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
     }
   };
 
-  const handleDoubleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+  const handleDoubleClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
@@ -626,9 +712,25 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
 
+    // Check if clicking on timeline area (top 30px)
+    if (y <= 30) {
+      // Seek to clicked position
+      const clickTime = (x / (beatWidth / 2));
+      if (audioServiceRef.current) {
+        audioServiceRef.current.seekTo(clickTime);
+        // Update app state through dispatch prop
+        const event = new CustomEvent('seekTime', { detail: clickTime });
+        window.dispatchEvent(event);
+      }
+      return;
+    }
+
     const newNote = getNoteFromPosition(x, y, { chromatic: e.altKey === true ? true : false, fineGrid: e.shiftKey === true });
     if (newNote) {
       addNote(newNote);
+      // Preview the added note
+      previewNote(newNote.pitch, getCurrentSectionForPreview());
+      
       // Subtle UI hint: brief overlay pulse where the note is added
       const canvas = canvasRef.current;
       if (canvas) {
@@ -663,7 +765,7 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
         }
       }
     }
-  };
+  }, [beatWidth, addNote, previewNote, getCurrentSectionForPreview, getNoteFromPosition, maxNote, noteHeight, draw]);
 
   const sectionOptions: { value: SectionType; label: string; color: string }[] = [
     { value: 'all', label: 'All Parts', color: 'text-white' },
@@ -728,22 +830,14 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
                 style={{ height: noteHeight }}
                   onClick={() => {
                     // Play note preview on click
-                    const audioContext = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
-                    const oscillator = audioContext.createOscillator();
-                    const gainNode = audioContext.createGain();
-                  
-                  oscillator.connect(gainNode);
-                  gainNode.connect(audioContext.destination);
-                  
-                  oscillator.frequency.value = 440 * Math.pow(2, (pitch - 69) / 12);
-                  oscillator.type = 'sine';
-                  
-                  gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
-                  gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5);
-                  
-                  oscillator.start();
-                  oscillator.stop(audioContext.currentTime + 0.5);
-                }}
+                    previewNote(pitch, getCurrentSectionForPreview());
+                  }}
+                  onMouseEnter={() => {
+                    // Preview note on hover
+                    if (!dragMode || dragMode === 'none') {
+                      previewNote(pitch, getCurrentSectionForPreview());
+                    }
+                  }}
               >
                 {noteName}
                 {isInScale && (
@@ -766,7 +860,7 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
       <div className="flex-1 relative bg-gray-900">
         <canvas
           ref={canvasRef}
-          width={width}
+          width={gridWidth}
           height={height}
           className="block focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-gray-900"
           onMouseDown={handleMouseDown}

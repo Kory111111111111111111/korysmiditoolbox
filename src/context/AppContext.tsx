@@ -1,5 +1,7 @@
 import React, { createContext, useContext, useReducer, useEffect, ReactNode } from 'react';
 import { AppState, MidiNote, AppSettings, RootNote, ScaleType } from '@/types';
+import { useUndoRedo } from '@/hooks/useUndoRedo';
+import { useKeyboardShortcuts, commonShortcuts, platformShortcut } from '@/hooks/useKeyboardShortcuts';
 
 interface AppContextType {
   state: AppState;
@@ -12,6 +14,13 @@ interface AppContextType {
   setRootNote: (rootNote: RootNote) => void;
   setScaleType: (scaleType: ScaleType) => void;
   updateSettings: (settings: Partial<AppSettings>) => void;
+  // Undo/Redo functionality
+  undo: () => void;
+  redo: () => void;
+  canUndo: boolean;
+  canRedo: boolean;
+  getUndoDescription: () => string | null;
+  getRedoDescription: () => string | null;
 }
 
 type AppAction =
@@ -116,6 +125,57 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(appReducer, defaultState);
+  
+  // Initialize undo/redo system
+  const {
+    saveState,
+    undo: undoAction,
+    redo: redoAction,
+    canUndo,
+    canRedo,
+    getCurrentHistoryState,
+    getUndoDescription,
+    getRedoDescription
+  } = useUndoRedo({
+    maxHistorySize: 50,
+    debounceMs: 300
+  });
+
+  // Undo function that applies previous state
+  const undo = () => {
+    undoAction();
+    const previousState = getCurrentHistoryState();
+    if (previousState) {
+      dispatch({ type: 'LOAD_STATE', payload: previousState });
+    }
+  };
+
+  // Redo function that applies next state
+  const redo = () => {
+    redoAction();
+    const nextState = getCurrentHistoryState();
+    if (nextState) {
+      dispatch({ type: 'LOAD_STATE', payload: nextState });
+    }
+  };
+
+  // Setup keyboard shortcuts
+  const shortcuts = {
+    undo: {
+      ...platformShortcut(commonShortcuts.undo),
+      handler: undo
+    },
+    redo: {
+      ...platformShortcut(commonShortcuts.redo),
+      handler: redo
+    },
+    redoAlt: {
+      ...platformShortcut(commonShortcuts.redoAlt),
+      handler: redo
+    }
+  };
+
+  useKeyboardShortcuts({ shortcuts });
 
   // Load state from localStorage on mount
   useEffect(() => {
@@ -148,7 +208,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       rootNote: state.rootNote,
       scaleType: state.scaleType
     }));
-  }, [state.notes, state.rootNote, state.scaleType]);
+    
+    // Save to undo/redo history
+    saveState(state);
+  }, [state.notes, state.rootNote, state.scaleType, saveState]);
 
   // Save settings to localStorage whenever they change
   useEffect(() => {
@@ -201,7 +264,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     clearNotes,
     setRootNote,
     setScaleType,
-    updateSettings
+    updateSettings,
+    undo,
+    redo,
+    canUndo,
+    canRedo,
+    getUndoDescription,
+    getRedoDescription
   };
 
   return (

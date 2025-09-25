@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useApp } from '@/context/AppContext';
 import { Button } from '@/components/ui/Button';
-import { XMarkIcon, SunIcon, MoonIcon } from '@heroicons/react/24/outline';
+import { XMarkIcon, MoonIcon } from '@heroicons/react/24/outline';
 
 interface SettingsPanelProps {
   isOpen: boolean;
@@ -19,10 +19,7 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
     onClose();
   };
 
-  const handleThemeToggle = () => {
-    const newTheme = state.settings.theme === 'light' ? 'dark' : 'light';
-    updateSettings({ theme: newTheme });
-  };
+  // Theme is enforced to dark; toggle disabled
 
   const handleClearSession = () => {
     clearNotes();
@@ -93,20 +90,23 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
             </div>
 
             {/* Theme Switcher */}
+            {/* Theme Switcher (disabled — app is dark-only) */}
             <div>
               <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-3">
                 Theme
               </h3>
               <Button
-                onClick={handleThemeToggle}
+                onClick={() => {}}
                 variant="secondary"
                 size="lg"
-                className="w-full"
-                leftIcon={state.settings.theme === 'light' ? <MoonIcon className="w-5 h-5" /> : <SunIcon className="w-5 h-5" />}
+                className="w-full cursor-not-allowed opacity-60"
+                leftIcon={<MoonIcon className="w-5 h-5" />}
               >
-                Switch to {state.settings.theme === 'light' ? 'Dark' : 'Light'} Mode
+                Dark theme is enforced
               </Button>
             </div>
+
+            {/* Editor Snapping moved to the piano roll header */}
 
             {/* Application Data */}
             <div>

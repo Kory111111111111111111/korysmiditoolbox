@@ -1,6 +1,7 @@
 import React from 'react';
 import { Button } from '@/components/ui/Button';
 import { MusicalNoteIcon } from '@heroicons/react/24/outline';
+import PianoRollPreview from '@/components/PianoRollPreview';
 
 interface MainProps {
   notesCount: number;
@@ -41,12 +42,8 @@ export function Main({ notesCount, onOpenPianoRoll, children }: MainProps) {
                   </div>
                   
                   {/* Piano Roll Preview Area */}
-                  <div className="flex-1 bg-gray-900 rounded-lg border border-gray-700 flex items-center justify-center">
-                    <div className="text-center">
-                      <MusicalNoteIcon className="w-12 h-12 text-gray-600 mx-auto mb-3" />
-                      <p className="text-body-sm text-gray-400 mb-4">Piano roll preview</p>
-                      <p className="text-caption text-gray-500">Click "Open Editor" to edit notes</p>
-                    </div>
+                  <div className="flex-1 bg-gray-900 rounded-lg border border-gray-800 p-4">
+                    <PianoRollPreview />
                   </div>
                 </div>
               ) : (
@@ -55,7 +52,7 @@ export function Main({ notesCount, onOpenPianoRoll, children }: MainProps) {
                     <MusicalNoteIcon className="w-16 h-16 text-gray-600 mx-auto mb-6" />
                     <h3 className="text-h5 text-white mb-3">Your canvas is clear</h3>
                     <p className="text-body text-gray-400 mb-6">
-                      Select a key and scale, then click "Generate" to create a new chord progression.
+                      Select a key and scale, then click &quot;Generate&quot; to create a new chord progression.
                     </p>
                     <Button
                       onClick={onOpenPianoRoll}

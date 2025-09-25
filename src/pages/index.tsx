@@ -14,18 +14,19 @@ import { getDefaultProgression } from '@/utils/defaultProgression';
 import { PianoRollDimensions, RootNote, ScaleType } from '@/types';
 
 function MainApp() {
-  const { state, dispatch, clearNotes } = useApp();
+  const { state, dispatch, clearNotes, updateSettings } = useApp();
   const { success, error } = useToastActions();
   const [showSettings, setShowSettings] = useState(false);
   const [showPianoRoll, setShowPianoRoll] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [isPlaying, setIsPlaying] = useState(false);
   const [volume, setVolume] = useState(100);
   const [bpm, setBpm] = useState(120);
   
   const geminiService = useRef<GeminiService | null>(null);
   const audioService = useRef<AudioService | null>(null);
   const midiExportService = useRef<MidiExportService | null>(null);
+  const rafRef = useRef<number | null>(null);
+  const lastTsRef = useRef<number | null>(null);
 
   // Initialize services
   useEffect(() => {
@@ -46,10 +47,10 @@ function MainApp() {
     }
   }, [state.notes.length, dispatch]);
 
-  // Apply theme to document
+  // Force dark theme across the app
   useEffect(() => {
-    document.documentElement.classList.toggle('dark', state.settings.theme === 'dark');
-  }, [state.settings.theme]);
+    document.documentElement.classList.add('dark');
+  }, []);
 
   const handleGenerate = async () => {
     if (!state.settings.apiKey) {
@@ -132,19 +133,45 @@ function MainApp() {
   };
 
   const handlePlay = () => {
-    setIsPlaying(true);
-    // TODO: Implement actual audio playback
+    dispatch({ type: 'SET_PLAYING', payload: true });
   };
 
   const handlePause = () => {
-    setIsPlaying(false);
-    // TODO: Implement actual audio pause
+    dispatch({ type: 'SET_PLAYING', payload: false });
   };
 
   const handleStop = () => {
-    setIsPlaying(false);
-    // TODO: Implement actual audio stop
+    dispatch({ type: 'SET_PLAYING', payload: false });
+    dispatch({ type: 'SET_CURRENT_TIME', payload: 0 });
   };
+
+  // Simple playback clock updating currentTime in context
+  useEffect(() => {
+    if (!state.isPlaying) {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+      lastTsRef.current = null;
+      return;
+    }
+
+    const secondsPerBeat = 60 / bpm; // aligns visuals if bpm=120
+    const update = (timestamp: number) => {
+      if (lastTsRef.current == null) {
+        lastTsRef.current = timestamp;
+      }
+      const deltaMs = timestamp - lastTsRef.current;
+      lastTsRef.current = timestamp;
+      const deltaSec = deltaMs / 1000;
+      dispatch({ type: 'SET_CURRENT_TIME', payload: state.currentTime + deltaSec });
+      rafRef.current = requestAnimationFrame(update);
+    };
+    rafRef.current = requestAnimationFrame(update);
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+      lastTsRef.current = null;
+    };
+  }, [state.isPlaying, bpm, state.currentTime, dispatch]);
 
   const pianoRollDimensions: PianoRollDimensions = {
     width: 1000,
@@ -176,7 +203,7 @@ function MainApp() {
       </Main>
 
       <Footer
-        isPlaying={isPlaying}
+        isPlaying={state.isPlaying}
         onPlay={handlePlay}
         onPause={handlePause}
         onStop={handleStop}
@@ -194,20 +221,48 @@ function MainApp() {
             {/* Header */}
             <div className="p-6 border-b border-gray-700 bg-gray-800/90">
               <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-4">
+                <div className="flex items-center gap-3 flex-wrap">
                   <div className="flex items-center space-x-2">
                     <svg className="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
                     </svg>
                     <h2 className="text-h4 text-white">Piano Roll Editor</h2>
                   </div>
-                  <div className="flex items-center space-x-2 text-body-sm text-gray-400">
+                  <div className="hidden sm:flex items-center space-x-2 text-body-sm text-gray-400">
                     <span>•</span>
                     <span>Double-click to add notes</span>
                     <span>•</span>
                     <span>Drag to move</span>
                     <span>•</span>
                     <span>Resize edges</span>
+                  </div>
+                  {/* Quick Toggles */}
+                  <div className="flex items-center space-x-4 ml-2">
+                    <label className="flex items-center space-x-2 text-xs text-gray-300">
+                      <span>Scale</span>
+                      <button
+                        onClick={() => updateSettings({ snapToScale: !(state.settings.snapToScale ?? true) })}
+                        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors duration-200 ${state.settings.snapToScale ?? true ? 'bg-blue-600' : 'bg-gray-600'}`}
+                        aria-label="Toggle Snap to Scale"
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform duration-200 ${state.settings.snapToScale ?? true ? 'translate-x-4' : 'translate-x-1'}`}
+                        />
+                      </button>
+                    </label>
+                    <label className="flex items-center space-x-2 text-xs text-gray-300">
+                      <span>Grid</span>
+                      <button
+                        onClick={() => updateSettings({ snapToGrid: !(state.settings.snapToGrid ?? true) })}
+                        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors duration-200 ${state.settings.snapToGrid ?? true ? 'bg-blue-600' : 'bg-gray-600'}`}
+                        aria-label="Toggle Snap to Grid"
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform duration-200 ${state.settings.snapToGrid ?? true ? 'translate-x-4' : 'translate-x-1'}`}
+                        />
+                      </button>
+                    </label>
+                    <span className="text-[11px] text-gray-400">Alt: chromatic • Shift: fine grid</span>
                   </div>
                 </div>
                 <div className="flex items-center space-x-3">

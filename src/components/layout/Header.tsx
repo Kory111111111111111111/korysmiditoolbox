@@ -23,7 +23,7 @@ export function Header({ onExportMIDI, onExportWAV, onShare }: HeaderProps) {
               <MusicalNoteIcon className="w-6 h-6 text-white" />
             </div>
             <div>
-              <h1 className="text-h6 text-white font-semibold">Kory's MIDI Toolbox</h1>
+              <h1 className="text-h6 text-white font-semibold">Kory&apos;s MIDI Toolbox</h1>
               <p className="text-caption text-gray-400">v1.0</p>
             </div>
           </div>

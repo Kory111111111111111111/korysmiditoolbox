@@ -9,6 +9,8 @@ export interface MidiNote {
 export interface AppSettings {
   apiKey: string;
   theme: 'light' | 'dark';
+  snapToGrid?: boolean;
+  snapToScale?: boolean;
 }
 
 export interface AppState {

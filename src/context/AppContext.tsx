@@ -29,7 +29,9 @@ type AppAction =
 
 const defaultSettings: AppSettings = {
   apiKey: '',
-  theme: 'light'
+  theme: 'dark',
+  snapToGrid: true,
+  snapToScale: true
 };
 
 const defaultState: AppState = {

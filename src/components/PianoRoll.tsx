@@ -1,8 +1,13 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { useApp } from '@/context/AppContext';
 import { MidiNote, PianoRollDimensions, RootNote, ScaleType, SectionType, AudioSectionType } from '@/types';
-import { getNoteName, getScaleIntervals, getMidiNoteNumber, segmentNotesForPreview } from '@/utils/midiUtils';
+import { getNoteName, getScaleIntervals, getMidiNoteNumber } from '@/utils/midiUtils';
 import { AudioService } from '@/services/audioService';
+
+// Extended MidiNote type with section property
+interface MidiNoteWithSection extends MidiNote {
+  section?: SectionType;
+}
 
 interface PianoRollProps {
   dimensions: PianoRollDimensions;
@@ -25,7 +30,7 @@ interface ClipboardNote {
   velocity: number;
 }
 
-let clipboard: ClipboardNote[] = [];
+const clipboard: ClipboardNote[] = [];
 
 export default function PianoRoll({ dimensions }: PianoRollProps) {
   const { state, addNote, updateNote, deleteNote, selectNote, setEditingSection } = useApp();
@@ -37,8 +42,11 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
   const [isSelecting, setIsSelecting] = useState(false);
   const [lastClickTime, setLastClickTime] = useState(0);
   const [showHelp, setShowHelp] = useState(false);
+  const [showDebug, setShowDebug] = useState(false);
   const [hoveredNote, setHoveredNote] = useState<{ pitch: number; time: number } | null>(null);
   const dragOriginRef = useRef<{ x: number; y: number; noteId: string; original: MidiNote } | null>(null);
+  const lastUpdateRef = useRef<number>(0);
+  const pendingUpdateRef = useRef<boolean>(false);
 
   // Initialize audio service for preview
   useEffect(() => {
@@ -48,7 +56,7 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
     }
   }, []);
 
-  // Preview note on hover
+  // Preview note function
   const previewNote = useCallback(async (pitch: number, sectionId: AudioSectionType = 'melody') => {
     if (audioServiceRef.current) {
       try {
@@ -65,33 +73,109 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
     return state.editingSection as AudioSectionType;
   }, [state.editingSection]);
 
-  const { width, height, noteHeight, beatWidth } = dimensions;
+  const { height, noteHeight, beatWidth } = dimensions;
   const beatsPerBar = 4;
-  const bars = 4; // Match preview canvas bar count for consistency
+  const bars = 4;
   const totalBeats = bars * beatsPerBar;
   const gridWidth = totalBeats * beatWidth;
-  const quantDivisionsPerBeat = 4; // 16th notes
-  const secondsPerBeat = 0.5; // assuming 120 BPM mapping used elsewhere
-  const quantUnitSec = secondsPerBeat / quantDivisionsPerBeat; // 0.125s
+  const quantDivisionsPerBeat = 4;
+  const secondsPerBeat = 0.5;
+  const quantUnitSec = secondsPerBeat / quantDivisionsPerBeat;
 
-  // Filter notes based on editing section
+  // SIMPLE FILTERING - Just check section tags, no complex logic
   const getFilteredNotes = useCallback((): MidiNote[] => {
     if (state.editingSection === 'all') {
       return state.notes;
     }
     
-    const segmented = segmentNotesForPreview(state.notes);
-    return segmented[state.editingSection] || [];
+    // Only show notes that have explicit section tags matching current section
+    return state.notes.filter(note => {
+      const noteWithSection = note as MidiNoteWithSection;
+      return noteWithSection.section === state.editingSection;
+    });
   }, [state.notes, state.editingSection]);
 
   const filteredNotes = getFilteredNotes();
 
-  // Generate piano keys (C4 to C6) - More focused range
-  const minNote = 60; // C4
-  const maxNote = 84; // C6
+  // Full piano range with scrolling
+  const minNote = 21; // A0
+  const maxNote = 108; // C8
   const noteRange = maxNote - minNote + 1;
   const pianoHeight = noteRange * noteHeight;
 
+  // Scale helpers
+  const allowedPitchClasses = useCallback((): Set<number> => {
+    const rootPc = getMidiNoteNumber(state.rootNote as RootNote, 0) % 12;
+    const intervals = getScaleIntervals(state.scaleType as ScaleType);
+    const pcs = new Set<number>();
+    intervals.forEach(iv => pcs.add((rootPc + iv) % 12));
+    return pcs;
+  }, [state.rootNote, state.scaleType]);
+
+  const snapPitchToScale = useCallback((pitch: number): number => {
+    const pcs = allowedPitchClasses();
+    const pc = ((pitch % 12) + 12) % 12;
+    if (pcs.has(pc)) return pitch;
+    for (let delta = 1; delta <= 6; delta++) {
+      const up = ((pc + delta) % 12);
+      const down = ((pc - delta + 12) % 12);
+      if (pcs.has(up)) return pitch + delta;
+      if (pcs.has(down)) return pitch - delta;
+    }
+    return pitch;
+  }, [allowedPitchClasses]);
+
+  const quantizeTime = useCallback((timeSec: number, opts?: { snapToGrid?: boolean; fineGrid?: boolean }): number => {
+    const shouldSnap = opts?.snapToGrid ?? (state.settings.snapToGrid ?? true);
+    if (!shouldSnap) return Math.max(0, timeSec);
+    const step = (opts?.fineGrid ? quantUnitSec / 4 : quantUnitSec);
+    return Math.max(0, Math.round(timeSec / step) * step);
+  }, [state.settings.snapToGrid, quantUnitSec]);
+
+  const getNoteFromPosition = useCallback((x: number, y: number, opts?: { chromatic?: boolean; fineGrid?: boolean }): MidiNote | null => {
+    const noteY = Math.floor(y / noteHeight);
+    let pitch = maxNote - noteY;
+    
+    if ((state.settings.snapToScale ?? true) && !opts?.chromatic) {
+      pitch = snapPitchToScale(pitch);
+    }
+    
+    if (pitch < minNote || pitch > maxNote) return null;
+
+    const startTimeRaw = (x / (beatWidth / 2));
+    const startTime = quantizeTime(startTimeRaw, { fineGrid: opts?.fineGrid, snapToGrid: state.settings.snapToGrid });
+    const duration = secondsPerBeat; // Default to quarter note (0.5s) which fills one grid section
+
+    return {
+      id: '',
+      pitch,
+      startTime,
+      duration,
+      velocity: 0.8
+    };
+  }, [noteHeight, maxNote, state.settings.snapToScale, snapPitchToScale, minNote, beatWidth, quantizeTime, state.settings.snapToGrid, secondsPerBeat]);
+
+  const findNoteAtPosition = useCallback((x: number, y: number): { note: MidiNote; resizeType: 'resize-start' | 'resize-end' | 'move' } | null => {
+    for (const note of filteredNotes) {
+      const noteY = (maxNote - note.pitch) * noteHeight;
+      const noteX = note.startTime * (beatWidth / 2);
+      const noteWidth = note.duration * (beatWidth / 2);
+
+      if (y >= noteY && y <= noteY + noteHeight && x >= noteX && x <= noteX + noteWidth) {
+        const resizeThreshold = 6;
+        if (x - noteX < resizeThreshold) {
+          return { note, resizeType: 'resize-start' };
+        } else if (noteX + noteWidth - x < resizeThreshold) {
+          return { note, resizeType: 'resize-end' };
+        } else {
+          return { note, resizeType: 'move' };
+        }
+      }
+    }
+    return null;
+  }, [filteredNotes, maxNote, noteHeight, beatWidth]);
+
+  // Drawing function
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -99,45 +183,22 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Helpers and palette (dark-only)
+    // Colors
     const bg = '#0b0f18';
     const rowEven = '#0e1422';
     const rowOdd = '#0b0f18';
     const gridMinor = '#182235';
     const gridMajor = '#334155';
-    const greenTop = '#22c55e';
-    const greenBottom = '#16a34a';
-    const blueTop = '#60a5fa';
-    const blueBottom = '#3b82f6';
-    const noteBorder = '#0ea5e9';
-    const noteBorderGreen = '#10b981';
 
     const isBlackKey = (midi: number) => {
       const n = midi % 12;
       return n === 1 || n === 3 || n === 6 || n === 8 || n === 10;
     };
 
-    const roundedRect = (x: number, y: number, w: number, h: number, r: number) => {
-      const radius = Math.min(r, h / 2, w / 2);
-      ctx.beginPath();
-      ctx.moveTo(x + radius, y);
-      ctx.lineTo(x + w - radius, y);
-      ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
-      ctx.lineTo(x + w, y + h - radius);
-      ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
-      ctx.lineTo(x + radius, y + h);
-      ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
-      ctx.lineTo(x, y + radius);
-      ctx.quadraticCurveTo(x, y, x + radius, y);
-      ctx.closePath();
-    };
-
-    // Clear canvas
-    ctx.clearRect(0, 0, gridWidth, height);
-
-    // Background
+    // Clear and background
+    ctx.clearRect(0, 0, gridWidth, pianoHeight);
     ctx.fillStyle = bg;
-    ctx.fillRect(0, 0, gridWidth, height);
+    ctx.fillRect(0, 0, gridWidth, pianoHeight);
 
     // Row shading
     for (let i = 0; i < noteRange; i++) {
@@ -166,7 +227,7 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
       ctx.stroke();
     }
 
-    // Bar lines (thicker)
+    // Bar lines
     ctx.lineWidth = 2;
     ctx.strokeStyle = gridMajor;
     for (let bar = 0; bar < bars; bar++) {
@@ -177,67 +238,67 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
       ctx.stroke();
     }
 
-    // Draw notes with gradient, rounded corners and glow
+    // Draw notes with rounded corners and proper sizing
     filteredNotes.forEach(note => {
       const noteY = (maxNote - note.pitch) * noteHeight + 0.5;
       const noteX = note.startTime * (beatWidth / 2);
-      const noteWidth = Math.max(2, note.duration * (beatWidth / 2));
+      const noteWidth = Math.max(8, note.duration * (beatWidth / 2)); // Minimum width for visibility
       const noteHeightPx = Math.max(2, noteHeight - 2);
 
-      const isSelected = state.selectedNoteId === note.id || selectedNotes.has(note.id);
-      const isMultiSelected = selectedNotes.has(note.id) && selectedNotes.size > 1;
+      const isSelected = selectedNotes.has(note.id);
       
-      // Create gradient based on selection state
-      const grad = ctx.createLinearGradient(noteX, noteY, noteX, noteY + noteHeightPx);
-      if (isMultiSelected) {
-        grad.addColorStop(0, '#f59e0b'); // Orange for multi-selection
-        grad.addColorStop(1, '#d97706');
-      } else if (isSelected) {
-        grad.addColorStop(0, blueTop);
-        grad.addColorStop(1, blueBottom);
-      } else {
-        grad.addColorStop(0, greenTop);
-        grad.addColorStop(1, greenBottom);
-      }
-      ctx.fillStyle = grad;
+      // Simple color coding
+      let color = '#22c55e'; // Green for melody/default
+      if (state.editingSection === 'chord') color = '#3b82f6'; // Blue
+      if (state.editingSection === 'bass') color = '#f59e0b'; // Orange  
+      if (state.editingSection === 'arp') color = '#a855f7'; // Purple
+
+      // Rounded rectangle function
+      const roundedRect = (x: number, y: number, w: number, h: number, r: number) => {
+        const radius = Math.min(r, h / 2, w / 2);
+        ctx.beginPath();
+        ctx.moveTo(x + radius, y);
+        ctx.lineTo(x + w - radius, y);
+        ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
+        ctx.lineTo(x + w, y + h - radius);
+        ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
+        ctx.lineTo(x + radius, y + h);
+        ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
+        ctx.lineTo(x, y + radius);
+        ctx.quadraticCurveTo(x, y, x + radius, y);
+        ctx.closePath();
+      };
 
       // Enhanced glow for selected notes
       ctx.save();
-      const glowColor = isMultiSelected 
-        ? 'rgba(245,158,11,0.6)' 
-        : isSelected 
-          ? 'rgba(59,130,246,0.45)' 
-          : 'rgba(34,197,94,0.35)';
+      const glowColor = isSelected ? 'rgba(59,130,246,0.45)' : 'rgba(34,197,94,0.35)';
       ctx.shadowColor = glowColor;
       ctx.shadowBlur = isSelected ? 15 : 10;
-      roundedRect(noteX, noteY, noteWidth, noteHeightPx, 5);
+      
+      // Create gradient
+      const grad = ctx.createLinearGradient(noteX, noteY, noteX, noteY + noteHeightPx);
+      if (isSelected) {
+        grad.addColorStop(0, '#60a5fa');
+        grad.addColorStop(1, '#3b82f6');
+      } else {
+        const alpha = 'cc'; // 80% opacity
+        grad.addColorStop(0, color + alpha);
+        grad.addColorStop(1, color + '99'); // 60% opacity
+      }
+      
+      ctx.fillStyle = grad;
+      roundedRect(noteX, noteY, noteWidth, noteHeightPx, 4);
       ctx.fill();
       ctx.restore();
 
-      // Enhanced border for selected notes
+      // Enhanced border
       ctx.lineWidth = isSelected ? 2 : 1;
-      ctx.strokeStyle = isMultiSelected 
-        ? '#f59e0b' 
-        : isSelected 
-          ? noteBorder 
-          : noteBorderGreen;
-      roundedRect(noteX, noteY, noteWidth, noteHeightPx, 5);
+      ctx.strokeStyle = isSelected ? '#0ea5e9' : color;
+      roundedRect(noteX, noteY, noteWidth, noteHeightPx, 4);
       ctx.stroke();
-      
-      // Add selection indicator
-      if (isSelected && selectedNotes.size > 1) {
-        ctx.fillStyle = '#f59e0b';
-        ctx.beginPath();
-        ctx.arc(noteX + noteWidth - 6, noteY + 6, 3, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = 'white';
-        ctx.font = '8px monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText('✓', noteX + noteWidth - 6, noteY + 9);
-      }
     });
 
-    // Draw selection box
+    // Selection box
     if (selectionBox && isSelecting) {
       const { startX, startY, endX, endY } = selectionBox;
       const x = Math.min(startX, endX);
@@ -245,11 +306,8 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
       const w = Math.abs(endX - startX);
       const h = Math.abs(endY - startY);
       
-      // Selection box fill
       ctx.fillStyle = 'rgba(99, 102, 241, 0.1)';
       ctx.fillRect(x, y, w, h);
-      
-      // Selection box border
       ctx.strokeStyle = '#6366f1';
       ctx.lineWidth = 1;
       ctx.setLineDash([4, 4]);
@@ -257,7 +315,7 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
       ctx.setLineDash([]);
     }
 
-    // Draw playhead
+    // Playhead
     if (state.isPlaying) {
       const playheadX = state.currentTime * (beatWidth / 2);
       ctx.strokeStyle = '#f43f5e';
@@ -267,57 +325,11 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
       ctx.lineTo(playheadX, pianoHeight);
       ctx.stroke();
     }
-
-    // Draw timeline ruler at the top
-    const rulerHeight = 30;
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.95)';
-    ctx.fillRect(0, 0, gridWidth, rulerHeight);
-    
-    // Timeline markings
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.font = '11px monospace';
-    
-    for (let bar = 0; bar < bars; bar++) {
-      const x = bar * beatsPerBar * beatWidth;
-      
-      // Bar numbers
-      ctx.fillStyle = '#e2e8f0';
-      ctx.fillText(`${bar + 1}`, x + (beatsPerBar * beatWidth / 2), rulerHeight / 2);
-      
-      // Beat markings
-      for (let beat = 0; beat < beatsPerBar; beat++) {
-        const beatX = x + beat * beatWidth;
-        ctx.strokeStyle = beat === 0 ? '#64748b' : '#475569';
-        ctx.lineWidth = beat === 0 ? 2 : 1;
-        ctx.beginPath();
-        ctx.moveTo(beatX, rulerHeight * 0.7);
-        ctx.lineTo(beatX, rulerHeight);
-        ctx.stroke();
-        
-        if (beat === 0) {
-          ctx.fillStyle = '#64748b';
-          ctx.fillText((beat + 1).toString(), beatX + beatWidth/2, rulerHeight * 0.8);
-        }
-      }
-    }
-    
-    // Current time indicator
-    if (state.currentTime >= 0) {
-      const currentX = state.currentTime * (beatWidth / 2);
-      ctx.fillStyle = '#f43f5e';
-      ctx.beginPath();
-      ctx.moveTo(currentX - 6, 0);
-      ctx.lineTo(currentX + 6, 0);
-      ctx.lineTo(currentX, rulerHeight * 0.6);
-      ctx.closePath();
-      ctx.fill();
-    }
-  }, [state, gridWidth, height, noteHeight, beatWidth, noteRange, pianoHeight, totalBeats, isSelecting, selectedNotes, selectionBox, filteredNotes]);
+  }, [filteredNotes, state.editingSection, state.isPlaying, state.currentTime, selectedNotes, selectionBox, isSelecting, gridWidth, pianoHeight, noteHeight, beatWidth, maxNote, noteRange, totalBeats, bars, beatsPerBar]);
 
   useEffect(() => {
     draw();
-  }, [draw, filteredNotes]);
+  }, [draw]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -331,15 +343,12 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
         case 'backspace':
           e.preventDefault();
           if (selectedNotes.size > 0) {
-            // Only delete notes that are in the current filtered view
             selectedNotes.forEach(noteId => {
               if (filteredNotes.some(n => n.id === noteId)) {
                 deleteNote(noteId);
               }
             });
             setSelectedNotes(new Set());
-          } else if (state.selectedNoteId && filteredNotes.some(n => n.id === state.selectedNoteId)) {
-            deleteNote(state.selectedNoteId);
           }
           break;
 
@@ -351,163 +360,20 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
           }
           break;
 
-        case 'c':
-          if (e.ctrlKey || e.metaKey) {
-            e.preventDefault();
-            const notesToCopy = selectedNotes.size > 0 
-              ? filteredNotes.filter(n => selectedNotes.has(n.id))
-              : state.selectedNoteId 
-                ? filteredNotes.filter(n => n.id === state.selectedNoteId)
-                : [];
-            
-            if (notesToCopy.length > 0) {
-              // Calculate relative positions
-              const minTime = Math.min(...notesToCopy.map(n => n.startTime));
-              clipboard = notesToCopy.map(note => ({
-                pitch: note.pitch,
-                startTime: note.startTime - minTime,
-                duration: note.duration,
-                velocity: note.velocity
-              }));
-            }
-          }
-          break;
-
-        case 'v':
-          if ((e.ctrlKey || e.metaKey) && clipboard.length > 0) {
-            e.preventDefault();
-            const pasteTime = state.currentTime || 0;
-            const newNotes: MidiNote[] = clipboard.map(clipNote => ({
-              id: `note-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-              pitch: clipNote.pitch,
-              startTime: pasteTime + clipNote.startTime,
-              duration: clipNote.duration,
-              velocity: clipNote.velocity
-            }));
-            
-            // Clear current selection
-            setSelectedNotes(new Set());
-            selectNote(null);
-            
-            // Add new notes and select them
-            const newNoteIds = new Set<string>();
-            newNotes.forEach(note => {
-              addNote(note);
-              newNoteIds.add(note.id);
-            });
-            setSelectedNotes(newNoteIds);
-          }
-          break;
-
         case 'escape':
           setSelectedNotes(new Set());
           selectNote(null);
           setSelectionBox(null);
           setIsSelecting(false);
           break;
-
-        case '?':
-        case 'h':
-          if (!e.ctrlKey && !e.metaKey) {
-            setShowHelp(!showHelp);
-          }
-          break;
       }
     };
 
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [selectedNotes, state.notes, state.selectedNoteId, state.currentTime, deleteNote, addNote, selectNote, showHelp]);
+  }, [selectedNotes, filteredNotes, deleteNote, selectNote]);
 
-  // --- Scale snapping helpers ---
-  const allowedPitchClasses = useCallback((): Set<number> => {
-    // Root note pitch class (0-11)
-    const rootPc = getMidiNoteNumber(state.rootNote as RootNote, 0) % 12;
-    const intervals = getScaleIntervals(state.scaleType as ScaleType);
-    const pcs = new Set<number>();
-    intervals.forEach(iv => pcs.add((rootPc + iv) % 12));
-    return pcs;
-  }, [state.rootNote, state.scaleType]);
-
-  const snapPitchToScale = useCallback((pitch: number): number => {
-    const pcs = allowedPitchClasses();
-    const pc = ((pitch % 12) + 12) % 12;
-    if (pcs.has(pc)) return pitch;
-    // Search nearest semitone offset up/down up to an octave
-    for (let delta = 1; delta <= 6; delta++) {
-      const up = ((pc + delta) % 12);
-      const down = ((pc - delta + 12) % 12);
-      if (pcs.has(up)) return pitch + delta;
-      if (pcs.has(down)) return pitch - delta;
-    }
-    return pitch; // fallback (should not happen)
-  }, [allowedPitchClasses]);
-
-  const snapPitchToScaleDirectional = useCallback((pitch: number, direction: number): number => {
-    // direction: 1 for up, -1 for down
-    const pcs = allowedPitchClasses();
-    const pc = ((pitch % 12) + 12) % 12;
-    if (pcs.has(pc)) return pitch;
-    const step = direction >= 0 ? 1 : -1;
-    for (let delta = 1; delta <= 12; delta++) {
-      const candidate = pitch + step * delta;
-      const candidatePc = ((candidate % 12) + 12) % 12;
-      if (pcs.has(candidatePc)) return candidate;
-    }
-    return pitch;
-  }, [allowedPitchClasses]);
-
-  const quantizeTime = (timeSec: number, opts?: { snapToGrid?: boolean; fineGrid?: boolean }): number => {
-    const shouldSnap = opts?.snapToGrid ?? (state.settings.snapToGrid ?? true);
-    if (!shouldSnap) return Math.max(0, timeSec);
-    const step = (opts?.fineGrid ? quantUnitSec / 4 : quantUnitSec);
-    return Math.max(0, Math.round(timeSec / step) * step);
-  };
-
-  const getNoteFromPosition = (x: number, y: number, opts?: { chromatic?: boolean; fineGrid?: boolean }): MidiNote | null => {
-    const noteY = Math.floor(y / noteHeight);
-    let pitch = maxNote - noteY;
-    // Snap to selected scale unless chromatic requested
-    if ((state.settings.snapToScale ?? true) && !opts?.chromatic) {
-      pitch = snapPitchToScale(pitch);
-    }
-    
-    if (pitch < minNote || pitch > maxNote) return null;
-
-    const startTimeRaw = (x / (beatWidth / 2));
-    const startTime = quantizeTime(startTimeRaw, { fineGrid: opts?.fineGrid, snapToGrid: state.settings.snapToGrid });
-    const duration = Math.max(quantUnitSec, 0.5); // Default duration, min quant
-
-    return {
-      id: '',
-      pitch,
-      startTime,
-      duration,
-      velocity: 0.8
-    };
-  };
-
-  const findNoteAtPosition = (x: number, y: number): { note: MidiNote; resizeType: 'resize-start' | 'resize-end' | 'move' } | null => {
-    for (const note of filteredNotes) {
-      const noteY = (maxNote - note.pitch) * noteHeight;
-      const noteX = note.startTime * (beatWidth / 2);
-      const noteWidth = note.duration * (beatWidth / 2);
-
-      if (y >= noteY && y <= noteY + noteHeight && x >= noteX && x <= noteX + noteWidth) {
-        // Check if clicking near the start or end for resizing
-        const resizeThreshold = 6;
-        if (x - noteX < resizeThreshold) {
-          return { note, resizeType: 'resize-start' };
-        } else if (noteX + noteWidth - x < resizeThreshold) {
-          return { note, resizeType: 'resize-end' };
-        } else {
-          return { note, resizeType: 'move' };
-        }
-      }
-    }
-    return null;
-  };
-
+  // Mouse handlers with full drag functionality
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -522,10 +388,9 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
     setLastClickTime(now);
     
     if (foundNote) {
-      const isNoteSelected = selectedNotes.has(foundNote.note.id) || state.selectedNoteId === foundNote.note.id;
+      const isNoteSelected = selectedNotes.has(foundNote.note.id);
       
       if (e.shiftKey) {
-        // Add to selection with Shift
         const newSelection = new Set(selectedNotes);
         if (isNoteSelected) {
           newSelection.delete(foundNote.note.id);
@@ -535,20 +400,20 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
         setSelectedNotes(newSelection);
         selectNote(foundNote.note.id);
       } else if (e.ctrlKey || e.metaKey) {
-        // Toggle selection with Ctrl/Cmd
         const newSelection = new Set(selectedNotes);
         if (isNoteSelected) {
           newSelection.delete(foundNote.note.id);
           if (newSelection.size === 0) {
             selectNote(null);
+          } else {
+            selectNote(Array.from(newSelection)[0]);
           }
         } else {
           newSelection.add(foundNote.note.id);
           selectNote(foundNote.note.id);
         }
         setSelectedNotes(newSelection);
-      } else if (!isNoteSelected) {
-        // Single selection
+      } else {
         setSelectedNotes(new Set([foundNote.note.id]));
         selectNote(foundNote.note.id);
       }
@@ -556,7 +421,6 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
       setDragMode(foundNote.resizeType);
       dragOriginRef.current = { x, y, noteId: foundNote.note.id, original: { ...foundNote.note } };
     } else {
-      // Start selection box if clicking on empty space
       if (!e.shiftKey && !e.ctrlKey && !e.metaKey) {
         setSelectedNotes(new Set());
         selectNote(null);
@@ -572,7 +436,6 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
 
   const handleMouseUp = () => {
     if (dragMode === 'select' && selectionBox && isSelecting) {
-      // Complete selection box
       const { startX, startY, endX, endY } = selectionBox;
       const minX = Math.min(startX, endX);
       const maxX = Math.max(startX, endX);
@@ -586,7 +449,6 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
         const noteX = note.startTime * (beatWidth / 2);
         const noteWidth = note.duration * (beatWidth / 2);
         
-        // Check if note intersects with selection box
         if (noteX < maxX && noteX + noteWidth > minX && 
             noteY < maxY && noteY + noteHeight > minY) {
           selectedNoteIds.add(note.id);
@@ -615,20 +477,7 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
 
-    // Update hovered note for preview (only when not dragging)
-    if (dragMode === 'none') {
-      const notePosition = getNoteFromPosition(x, y);
-      if (notePosition && (!hoveredNote || hoveredNote.pitch !== notePosition.pitch)) {
-        setHoveredNote({ pitch: notePosition.pitch, time: notePosition.startTime });
-        // Preview the note
-        previewNote(notePosition.pitch, getCurrentSectionForPreview());
-      } else if (!notePosition) {
-        setHoveredNote(null);
-      }
-    }
-
     if (dragMode === 'select' && isSelecting && selectionBox) {
-      // Update selection box
       setSelectionBox(prev => prev ? {
         ...prev,
         endX: x,
@@ -639,69 +488,94 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
 
     if (dragMode === 'none' || !dragOriginRef.current) return;
 
-    const origin = dragOriginRef.current;
-    const note = state.notes.find(n => n.id === origin.noteId);
-    if (!note) return;
-
-    const deltaX = x - origin.x;
-    const deltaY = y - origin.y;
-
-    if (dragMode === 'move') {
-      const semitoneSteps = Math.round(deltaY / noteHeight);
-      const direction = semitoneSteps === 0 ? 0 : (semitoneSteps > 0 ? -1 : 1);
-      const proposedPitch = origin.original.pitch - semitoneSteps;
-      let snappedPitch = proposedPitch;
-      const allowScaleSnap = (state.settings.snapToScale ?? true) && !e.altKey;
-      if (allowScaleSnap) {
-        if (direction !== 0) {
-          snappedPitch = snapPitchToScaleDirectional(proposedPitch, direction);
-        } else {
-          snappedPitch = snapPitchToScale(proposedPitch);
-        }
+    const now = performance.now();
+    if (pendingUpdateRef.current || (now - lastUpdateRef.current < 16)) {
+      return;
+    }
+    
+    pendingUpdateRef.current = true;
+    requestAnimationFrame(() => {
+      pendingUpdateRef.current = false;
+      lastUpdateRef.current = performance.now();
+      
+      const origin = dragOriginRef.current;
+      if (!origin) return;
+      
+      // Always use state.notes for finding notes during drag
+      const note = state.notes.find(n => n.id === origin.noteId);
+      if (!note) {
+        console.error('Note not found during drag:', origin.noteId);
+        return;
       }
-      const clampedPitch = Math.max(minNote, Math.min(maxNote, snappedPitch));
 
-      const startTimeRaw = origin.original.startTime + deltaX / (beatWidth / 2);
-      const newStartTime = quantizeTime(Math.max(0, startTimeRaw), { fineGrid: e.shiftKey, snapToGrid: state.settings.snapToGrid });
+      const deltaX = x - origin.x;
+      const deltaY = y - origin.y;
 
-      // If multiple notes are selected, move them all
-      if (selectedNotes.size > 1 && selectedNotes.has(origin.noteId)) {
+      if (dragMode === 'move') {
+        const semitoneSteps = Math.round(deltaY / noteHeight);
+        const proposedPitch = origin.original.pitch - semitoneSteps;
+        const clampedPitch = Math.max(minNote, Math.min(maxNote, proposedPitch));
+
+        const startTimeRaw = origin.original.startTime + deltaX / (beatWidth / 2);
+        const newStartTime = quantizeTime(Math.max(0, startTimeRaw), { 
+          fineGrid: e.shiftKey, 
+          snapToGrid: state.settings.snapToGrid 
+        });
+
         const pitchDelta = clampedPitch - origin.original.pitch;
         const timeDelta = newStartTime - origin.original.startTime;
-        
-        selectedNotes.forEach(noteId => {
-          const selectedNote = filteredNotes.find(n => n.id === noteId);
-          if (selectedNote && noteId !== origin.noteId) {
-            const newPitch = Math.max(minNote, Math.min(maxNote, selectedNote.pitch + pitchDelta));
-            const newTime = Math.max(0, selectedNote.startTime + timeDelta);
-            updateNote(noteId, {
+
+        const notesToMove = selectedNotes.size > 1 && selectedNotes.has(origin.noteId) 
+          ? Array.from(selectedNotes)
+              .map(id => state.notes.find(n => n.id === id))
+              .filter((n): n is MidiNote => n !== undefined)
+          : [note];
+
+        notesToMove.forEach(noteToMove => {
+          if (noteToMove.id === origin.noteId) {
+            updateNote(noteToMove.id, {
+              pitch: clampedPitch,
+              startTime: newStartTime
+            });
+          } else {
+            const newPitch = Math.max(minNote, Math.min(maxNote, noteToMove.pitch + pitchDelta));
+            const newTime = Math.max(0, noteToMove.startTime + timeDelta);
+            updateNote(noteToMove.id, {
               pitch: newPitch,
               startTime: newTime
             });
           }
         });
+        
+      } else if (dragMode === 'resize-start') {
+        const startTimeRaw = origin.original.startTime + deltaX / (beatWidth / 2);
+        const newStartTime = quantizeTime(Math.max(0, startTimeRaw), { 
+          fineGrid: e.shiftKey, 
+          snapToGrid: state.settings.snapToGrid 
+        });
+        const newDuration = Math.max(
+          quantUnitSec / (e.shiftKey ? 4 : 1), 
+          origin.original.duration - (newStartTime - origin.original.startTime)
+        );
+
+        updateNote(origin.noteId, {
+          startTime: newStartTime,
+          duration: newDuration
+        });
+      } else if (dragMode === 'resize-end') {
+        const newDuration = Math.max(
+          quantUnitSec / (e.shiftKey ? 4 : 1), 
+          quantizeTime(
+            origin.original.duration + deltaX / (beatWidth / 2), 
+            { fineGrid: e.shiftKey, snapToGrid: state.settings.snapToGrid }
+          )
+        );
+
+        updateNote(origin.noteId, {
+          duration: newDuration
+        });
       }
-
-      updateNote(origin.noteId, {
-        pitch: clampedPitch,
-        startTime: newStartTime
-      });
-    } else if (dragMode === 'resize-start') {
-      const startTimeRaw = origin.original.startTime + deltaX / (beatWidth / 2);
-      const newStartTime = quantizeTime(Math.max(0, startTimeRaw), { fineGrid: e.shiftKey, snapToGrid: state.settings.snapToGrid });
-      const newDuration = Math.max(quantUnitSec / (e.shiftKey ? 4 : 1), origin.original.duration - (newStartTime - origin.original.startTime));
-
-      updateNote(origin.noteId, {
-        startTime: newStartTime,
-        duration: newDuration
-      });
-    } else if (dragMode === 'resize-end') {
-      const newDuration = Math.max(quantUnitSec / (e.shiftKey ? 4 : 1), quantizeTime(origin.original.duration + deltaX / (beatWidth / 2), { fineGrid: e.shiftKey, snapToGrid: state.settings.snapToGrid }));
-
-      updateNote(origin.noteId, {
-        duration: newDuration
-      });
-    }
+    });
   };
 
   const handleDoubleClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -712,61 +586,23 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
 
-    // Check if clicking on timeline area (top 30px)
-    if (y <= 30) {
-      // Seek to clicked position
-      const clickTime = (x / (beatWidth / 2));
-      if (audioServiceRef.current) {
-        audioServiceRef.current.seekTo(clickTime);
-        // Update app state through dispatch prop
-        const event = new CustomEvent('seekTime', { detail: clickTime });
-        window.dispatchEvent(event);
-      }
-      return;
-    }
+    // Check if clicking on existing note
+    const existingNote = findNoteAtPosition(x, y);
+    if (existingNote) return;
 
-    const newNote = getNoteFromPosition(x, y, { chromatic: e.altKey === true ? true : false, fineGrid: e.shiftKey === true });
-    if (newNote) {
-      addNote(newNote);
-      // Preview the added note
-      previewNote(newNote.pitch, getCurrentSectionForPreview());
-      
-      // Subtle UI hint: brief overlay pulse where the note is added
-      const canvas = canvasRef.current;
-      if (canvas) {
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          const noteY = (maxNote - newNote.pitch) * noteHeight;
-          const noteX = newNote.startTime * (beatWidth / 2);
-          const noteWidth = newNote.duration * (beatWidth / 2);
-          ctx.save();
-          ctx.globalAlpha = 0.6;
-          ctx.fillStyle = '#60a5fa';
-          ctx.fillRect(noteX, noteY, noteWidth, noteHeight - 1);
-          ctx.restore();
-          // Fade the overlay out gently
-          let opacity = 0.6;
-          const fade = () => {
-            if (!ctx) return;
-            ctx.clearRect(noteX, noteY, noteWidth, noteHeight - 1);
-            opacity -= 0.12;
-            if (opacity <= 0) {
-              draw();
-              return;
-            }
-            ctx.save();
-            ctx.globalAlpha = Math.max(opacity, 0);
-            ctx.fillStyle = '#60a5fa';
-            ctx.fillRect(noteX, noteY, noteWidth, noteHeight - 1);
-            ctx.restore();
-            requestAnimationFrame(fade);
-          };
-          requestAnimationFrame(fade);
-        }
-      }
+    const newNote = getNoteFromPosition(x, y);
+    if (newNote && newNote.pitch >= minNote && newNote.pitch <= maxNote) {
+      // Default to quarter note duration (fills one grid section)
+      const quarterNoteDuration = secondsPerBeat; // 0.5 seconds = quarter note at 120 BPM
+      addNote({
+        ...newNote,
+        duration: quarterNoteDuration, // Full quarter note instead of short 16th
+        section: state.editingSection === 'all' ? 'melody' : state.editingSection
+      } as Omit<MidiNoteWithSection, "id">);
     }
-  }, [beatWidth, addNote, previewNote, getCurrentSectionForPreview, getNoteFromPosition, maxNote, noteHeight, draw]);
+  }, [findNoteAtPosition, getNoteFromPosition, minNote, maxNote, secondsPerBeat, addNote, state.editingSection]);
 
+  // Section options
   const sectionOptions: { value: SectionType; label: string; color: string }[] = [
     { value: 'all', label: 'All Parts', color: 'text-white' },
     { value: 'chord', label: 'Chord', color: 'text-blue-400' },
@@ -788,7 +624,7 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
             <select
               value={state.editingSection}
               onChange={(e) => setEditingSection(e.target.value as SectionType)}
-              className="bg-gray-700 border border-gray-600 rounded px-3 py-1 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+              className="bg-gray-700 border border-gray-600 rounded px-3 py-1 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
             >
               {sectionOptions.map(option => (
                 <option key={option.value} value={option.value}>
@@ -801,190 +637,133 @@ export default function PianoRoll({ dimensions }: PianoRollProps) {
             </span>
           </div>
         </div>
-        <div className="text-xs text-gray-400">
-          {state.editingSection === 'all' ? 'Editing all notes' : `Editing only ${currentSection.label.toLowerCase()} notes`}
-        </div>
       </div>
 
-      {/* Main Editor */}
-      <div className="flex flex-1">
+      {/* Main Editor with Scrolling */}
+      <div className="flex flex-1 h-[600px]">
         {/* Piano Keyboard */}
-      <div className="w-20 bg-gray-950 border-r border-gray-800 relative">
-        <div className="h-full overflow-hidden">
-          {Array.from({ length: noteRange }, (_, i) => {
-            const pitch = maxNote - i;
-            const noteName = getNoteName(pitch);
-            const isBlackKey = noteName.includes('#');
-            const isInScale = allowedPitchClasses().has(pitch % 12);
-            
-            return (
-              <div
-                key={pitch}
-                className={`flex items-center justify-center text-xs font-semibold border-b border-gray-800 transition-all duration-150 relative ${
-                  isBlackKey 
-                    ? 'bg-gray-800 text-white hover:bg-gray-700' 
-                    : 'bg-gray-900 text-gray-200 hover:bg-gray-800'
-                } ${
-                  isInScale ? 'ring-1 ring-indigo-500/30' : ''
-                }`}
-                style={{ height: noteHeight }}
-                  onClick={() => {
-                    // Play note preview on click
-                    previewNote(pitch, getCurrentSectionForPreview());
-                  }}
-                  onMouseEnter={() => {
-                    // Preview note on hover
-                    if (!dragMode || dragMode === 'none') {
-                      previewNote(pitch, getCurrentSectionForPreview());
-                    }
-                  }}
-              >
-                {noteName}
-                {isInScale && (
-                  <div className="absolute right-1 w-1 h-1 bg-indigo-400 rounded-full" />
-                )}
-              </div>
-            );
-          })}
-        </div>
-        
-        {/* Scale indicator */}
-        <div className="absolute bottom-2 left-1 right-1 text-center">
-          <div className="text-[10px] text-gray-400 bg-gray-800/80 rounded px-1 py-0.5">
-            {state.rootNote}
+        <div className="w-20 bg-gray-950 border-r border-gray-800 relative overflow-y-auto">
+          <div style={{ height: pianoHeight }}>
+            {Array.from({ length: noteRange }, (_, i) => {
+              const pitch = maxNote - i;
+              const noteName = getNoteName(pitch);
+              const isBlackKey = noteName.includes('#');
+              const isInScale = allowedPitchClasses().has(pitch % 12);
+              
+              return (
+                <div
+                  key={pitch}
+                  className={`flex items-center justify-center text-xs font-semibold border-b border-gray-800 relative ${
+                    isBlackKey 
+                      ? 'bg-gray-800 text-white hover:bg-gray-700' 
+                      : 'bg-gray-900 text-gray-200 hover:bg-gray-800'
+                  } ${
+                    isInScale ? 'ring-1 ring-indigo-500/30' : ''
+                  }`}
+                  style={{ height: noteHeight }}
+                  onClick={() => previewNote(pitch, getCurrentSectionForPreview())}
+                >
+                  {noteName}
+                  {isInScale && (
+                    <div className="absolute right-1 w-1 h-1 bg-indigo-400 rounded-full" />
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
-      </div>
 
-      {/* Piano Roll Canvas */}
-      <div className="flex-1 relative bg-gray-900">
-        <canvas
-          ref={canvasRef}
-          width={gridWidth}
-          height={height}
-          className="block focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-gray-900"
-          onMouseDown={handleMouseDown}
-          onMouseUp={handleMouseUp}
-          onMouseMove={handleMouseMove}
-          onDoubleClick={handleDoubleClick}
-          tabIndex={0}
-        />
-        
-        {/* Enhanced info overlay */}
-        <div className="absolute top-2 right-2 space-y-2">
-          <div className="bg-black/60 text-white text-xs px-3 py-2 rounded-lg backdrop-blur-sm border border-gray-700/50">
-            <div className="flex items-center space-x-2 mb-1">
-              <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-              <span className="font-medium">{selectedNotes.size || (state.selectedNoteId ? 1 : 0)} selected</span>
-            </div>
-            <div className="text-gray-300 space-y-1">
-              <div>Double-click: Add notes</div>
-              <div>Drag: Move • Edges: Resize</div>
-              <div>Shift: Multi-select • Ctrl+A: Select all</div>
-            </div>
-          </div>
+        {/* Piano Roll Canvas */}
+        <div className="flex-1 relative bg-gray-900 overflow-auto">
+          <canvas
+            ref={canvasRef}
+            width={gridWidth}
+            height={pianoHeight}
+            className="block focus:outline-none"
+            onMouseDown={handleMouseDown}
+            onMouseUp={handleMouseUp}
+            onMouseMove={handleMouseMove}
+            onDoubleClick={handleDoubleClick}
+            tabIndex={0}
+          />
           
-          <button
-            onClick={() => setShowHelp(!showHelp)}
-            className="bg-black/60 text-white text-xs px-2 py-1 rounded backdrop-blur-sm border border-gray-700/50 hover:bg-black/80 transition-colors"
-          >
-            ?
-          </button>
-        </div>
-        
-        {/* Help overlay */}
-        {showHelp && (
-          <div className="absolute inset-4 bg-black/90 backdrop-blur-md rounded-xl border border-gray-700 p-6 text-white z-10">
-            <div className="flex justify-between items-start mb-6">
-              <h3 className="text-lg font-semibold">Piano Roll Shortcuts</h3>
+          {/* Info overlay */}
+          <div className="absolute top-2 right-2 space-y-2">
+            <div className="bg-black/60 text-white text-xs px-3 py-2 rounded-lg backdrop-blur-sm border border-gray-700/50">
+              <div className="flex items-center space-x-2 mb-1">
+                <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                <span className="font-medium">{selectedNotes.size} selected</span>
+              </div>
+              <div className="text-gray-300 space-y-1">
+                <div>Double-click: Add notes</div>
+                <div>Section: {currentSection.label}</div>
+              </div>
+            </div>
+
+            {/* Debug info - toggleable */}
+            {showDebug && (
+              <div className="bg-black/80 text-white text-xs px-3 py-2 rounded-lg backdrop-blur-sm border border-red-700/50">
+                <div className="text-red-400 font-medium mb-1">Debug Info</div>
+                <div className="text-gray-300 space-y-1">
+                  <div>Total: {state.notes.length} notes</div>
+                  <div>Filtered: {filteredNotes.length} notes</div>
+                  <div>Section: {state.editingSection}</div>
+                </div>
+              </div>
+            )}
+
+            {/* Control buttons */}
+            <div className="flex space-x-2">
               <button
-                onClick={() => setShowHelp(false)}
-                className="text-gray-400 hover:text-white"
+                onClick={() => setShowDebug(!showDebug)}
+                className={`text-xs px-2 py-1 rounded backdrop-blur-sm border transition-colors ${
+                  showDebug 
+                    ? 'bg-red-600/80 text-white border-red-500/50' 
+                    : 'bg-black/60 text-white border-gray-700/50'
+                }`}
               >
-                ✕
+                🐛
+              </button>
+              <button
+                onClick={() => setShowHelp(!showHelp)}
+                className="bg-black/60 text-white text-xs px-2 py-1 rounded backdrop-blur-sm border border-gray-700/50"
+              >
+                ?
               </button>
             </div>
-            
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-sm">
-              <div>
-                <h4 className="font-semibold mb-3 text-indigo-400">Note Editing</h4>
-                <div className="space-y-2">
-                  <div className="flex justify-between">
-                    <span>Add note</span>
-                    <span className="text-gray-400">Double-click</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Delete note</span>
-                    <span className="text-gray-400">Delete / Backspace</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Move note</span>
-                    <span className="text-gray-400">Drag</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Resize note</span>
-                    <span className="text-gray-400">Drag edges</span>
-                  </div>
-                </div>
+          </div>
+
+          {/* Help overlay */}
+          {showHelp && (
+            <div className="absolute inset-4 bg-black/90 backdrop-blur-md rounded-xl border border-gray-700 p-6 text-white z-10">
+              <div className="flex justify-between items-start mb-6">
+                <h3 className="text-lg font-semibold">Piano Roll Guide</h3>
+                <button onClick={() => setShowHelp(false)} className="text-gray-400 hover:text-white">✕</button>
               </div>
               
-              <div>
-                <h4 className="font-semibold mb-3 text-purple-400">Selection</h4>
-                <div className="space-y-2">
-                  <div className="flex justify-between">
-                    <span>Select multiple</span>
-                    <span className="text-gray-400">Shift + Click</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Toggle selection</span>
-                    <span className="text-gray-400">Ctrl + Click</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Select all</span>
-                    <span className="text-gray-400">Ctrl + A</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Box select</span>
-                    <span className="text-gray-400">Drag empty space</span>
+              <div className="text-sm space-y-4">
+                <div>
+                  <h4 className="font-semibold mb-2 text-indigo-400">Sections</h4>
+                  <div className="space-y-1">
+                    <div><span className="text-blue-400">Chord:</span> Harmonic content</div>
+                    <div><span className="text-green-400">Melody:</span> Main melodic lines</div>
+                    <div><span className="text-yellow-400">Bass:</span> Low-end foundation</div>
+                    <div><span className="text-purple-400">Arp:</span> Arpeggiated patterns</div>
                   </div>
                 </div>
-              </div>
-              
-              <div>
-                <h4 className="font-semibold mb-3 text-green-400">Copy/Paste</h4>
-                <div className="space-y-2">
-                  <div className="flex justify-between">
-                    <span>Copy</span>
-                    <span className="text-gray-400">Ctrl + C</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Paste</span>
-                    <span className="text-gray-400">Ctrl + V</span>
-                  </div>
-                </div>
-              </div>
-              
-              <div>
-                <h4 className="font-semibold mb-3 text-yellow-400">Modifiers</h4>
-                <div className="space-y-2">
-                  <div className="flex justify-between">
-                    <span>Chromatic mode</span>
-                    <span className="text-gray-400">Hold Alt</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Fine grid</span>
-                    <span className="text-gray-400">Hold Shift</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Clear selection</span>
-                    <span className="text-gray-400">Escape</span>
+                
+                <div>
+                  <h4 className="font-semibold mb-2 text-green-400">Controls</h4>
+                  <div className="space-y-1">
+                    <div>Double-click: Add note</div>
+                    <div>Scroll: Navigate piano range</div>
+                    <div>Section dropdown: Switch editing mode</div>
                   </div>
                 </div>
               </div>
             </div>
-          </div>
-        )}      
-      </div>
+          )}
+        </div>
       </div>
     </div>
   );

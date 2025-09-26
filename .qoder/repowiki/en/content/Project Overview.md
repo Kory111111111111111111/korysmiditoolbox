@@ -98,21 +98,21 @@ The stack emphasizes client-side execution, minimizing server dependencies and m
 
 ```mermaid
 graph TB
-subgraph "Frontend"
-A[Next.js 15] --> B[React 19]
-B --> C[TypeScript]
-C --> D[Tailwind CSS]
-A --> E[@google/generative-ai]
-A --> F[Tone.js]
-A --> G[midi-writer-js]
-end
-subgraph "Deployment"
-H[Static Site Export]
-A --> H
-H --> I[GitHub Pages]
-H --> J[Netlify]
-H --> K[Vercel]
-end
+    subgraph "Frontend"
+        A["Next.js 15"] --> B["React 19"]
+        B --> C["TypeScript"]
+        C --> D["Tailwind CSS"]
+        A --> E["@google/generative-ai"]
+        A --> F["Tone.js"]
+        A --> G["midi-writer-js"]
+    end
+    subgraph "Deployment"
+        H["Static Site Export"]
+        A --> H
+        H --> I["GitHub Pages"]
+        H --> J["Netlify"]
+        H --> K["Vercel"]
+    end
 ```
 
 **Diagram sources**
